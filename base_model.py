@@ -5,26 +5,15 @@ import numpy as np
 class ShBaseModel(object):
 
     def __init__(self, review_period, forecast_period=1, random_state=0):
-        self.__review_period = review_period
-        self.__forecast_period = forecast_period
-        self.__random_state = random_state
-        self.__linear_features = []
-        self.__mean = 0.0
-        self.score = 0.0
-        self.__y = pd.Series()
-        self.__X = pd.DataFrame()
+        self.review_period = review_period
+        self.forecast_period = forecast_period
+        self.random_state = random_state
+        self.linear_features = []
+        self.mean = 0.0
+        self.y = pd.Series()
+        self.X = pd.DataFrame()
         self.lr_alpha = 0.001
-        self.__shift_mask = []
-        self.__ema_mask = []
-        self.__dma_mask = []
-        self.__tma_mask = []
-        self.__qma_mask = []
-        self.__timedata_mask = set()
-        self.__shift_weights = pd.Series()
-        self.__timedata_weights = pd.Series()
-        self.__indicators_weights = pd.Series()
-        self.__X_pred = pd.DataFrame()
-
+        self.X_pred = pd.DataFrame()
         return
 
     def fit(self, X: pd.DataFrame, y: pd.Series, additive_features: list = None, cv=16, verbose=False):
@@ -51,4 +40,4 @@ class ShBaseModel(object):
 
     @property
     def step_time(self):
-        return self.__X.index.to_series()[1] - self.__X.index.to_series()[0]
+        return self.X.index.to_series()[1] - self.X.index.to_series()[0]

@@ -6,9 +6,9 @@ from cross_validation import *
 class TSShaman(object):
 
     def __init__(self, review_period, forecast_period=1, random_state=0):
-        self.__review_period = review_period
-        self.__forecast_period = forecast_period
-        self.__random_state = random_state
+        self.review_period = review_period
+        self.forecast_period = forecast_period
+        self.random_state = random_state
         self.linear_model = ShLinearModel(review_period, forecast_period, random_state)
         return
 
@@ -18,3 +18,7 @@ class TSShaman(object):
 
     def predict(self, X_additive_features=pd.DataFrame(), forecast_period=1, verbose=False):
         return self.linear_model.predict(X_additive_features, forecast_period, verbose)
+
+    @property
+    def score(self):
+        return self.linear_model.score
