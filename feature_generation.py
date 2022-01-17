@@ -26,49 +26,33 @@ class TimedataFeatures(object):
                 self.mask.add(col)
         return
 
-    def generate(self, data: pd.DataFrame, y: Union[pd.Series, None], calculate_weights=True):
-        features = pd.DataFrame()
+    def generate(self, data: pd.DataFrame, y: Union[pd.Series, None] = None, calculate_weights=True) -> pd.DataFrame:
 
         if pd.api.types.is_datetime64_ns_dtype(data.index):
+            features = pd.DataFrame(index=data.index)
             hour_features = self.generate_hour_features(data.index.to_series(), name='index')
             day_features = self.generate_day_features(data.index.to_series(), name='index')
             week_features = self.generate_week_features(data.index.to_series(), name='index')
             weekend_feature = self.generate_weekend_feature(data.index.to_series(), name='index')
             year_features = self.generate_year_features(data.index.to_series(), name='index')
             if not hour_features.empty:
-                features = features.join(hour_features, how='outer')
+                features = features.join(hour_features)
             if not day_features.empty:
-                features = features.join(day_features, how='outer')
+                features = features.join(day_features)
             if not week_features.empty:
-                features = features.join(week_features, how='outer')
+                features = features.join(week_features)
             if not weekend_feature.empty:
-                features = features.join(weekend_feature, how='outer')
+                features = features.join(weekend_feature)
             if not year_features.empty:
-                features = features.join(year_features, how='outer')
+                features = features.join(year_features)
+            if calculate_weights:
+                self.weights = get_corr_weights(features, y)
+            return features * self.weights
+        else:
+            return pd.DataFrame()
 
-        for series in data.iteritems():
-            if pd.api.types.is_datetime64_ns_dtype(series[1]):
-                hour_features = self.generate_hour_features(series[1], name=str(series[0]) + '_')
-                day_features = self.generate_day_features(series[1], name=str(series[0]) + '_')
-                week_features = self.generate_week_features(series[1], name=str(series[0]) + '_')
-                weekend_feature = self.generate_weekend_feature(series[1], name=str(series[0]) + '_')
-                year_features = self.generate_year_features(series[1], name=str(series[0]) + '_')
-                if not hour_features.empty:
-                    features = features.join(hour_features, how='outer')
-                if not day_features.empty:
-                    features = features.join(day_features, how='outer')
-                if not week_features.empty:
-                    features = features.join(week_features, how='outer')
-                if not weekend_feature.empty:
-                    features = features.join(weekend_feature, how='outer')
-                if not year_features.empty:
-                    features = features.join(year_features, how='outer')
-        if calculate_weights:
-            self.weights = get_corr_weights(features, y).iloc[0]
+    def generate_hour_features(self, series: pd.Series, name='') -> pd.DataFrame:
 
-        return features * self.weights
-
-    def generate_hour_features(self, series: pd.Series, name=''):
         # Check data type
         if not pd.api.types.is_datetime64_ns_dtype(series):
             return pd.DataFrame()
@@ -100,22 +84,28 @@ class TimedataFeatures(object):
             result = result.join(pd.DataFrame(hour_cos, index=series.values, columns=[name + '_hour_cos']))
         return result
 
-    def generate_day_features(self, series: pd.Series, name=''):
+    def generate_day_features(self, series: pd.Series, name='') -> pd.DataFrame:
+
         # Check data type
         if not pd.api.types.is_datetime64_ns_dtype(series):
             return pd.DataFrame()
         result = pd.DataFrame(index=series.values)
+
         # Check if the period of observation is too short for day encoding
         if abs(pd.Timedelta(series[0] - series[-1]).total_seconds()) < 86400 and (self.mask is None):
             return pd.DataFrame()
+
         # Generate linear encoding vector
         day_lin = (np.array(series.dt.hour / 24 + series.dt.minute / 1140) - 0.5) / 0.3
+
         # Check if the variance of values too small for day encoding
         if np.std(day_lin) < 0.7 and (self.mask is None):
             return pd.DataFrame()
+
         # Generate SIN and COS encoding vectors
         day_sin = np.sin(day_lin * (2 * pi * 0.3)) / 0.7071
         day_cos = np.cos(day_lin * (2 * pi * 0.3)) / 0.7071
+
         # Check if the variance of values too small for day encoding
         if (np.std(day_sin) < 0.8 or np.std(day_cos) < 0.8) and (self.mask is None):
             return pd.DataFrame()
@@ -127,73 +117,92 @@ class TimedataFeatures(object):
             result = result.join(pd.DataFrame(day_cos, index=series.values, columns=[name + '_day_cos']))
         return result
 
-    def generate_week_features(self, series: pd.Series, name=''):
+    def generate_week_features(self, series: pd.Series, name='') -> pd.DataFrame:
+
         # Check data type
         if not pd.api.types.is_datetime64_ns_dtype(series):
             return pd.DataFrame()
+
         # Check if the period of observation is too short for week encoding
         if abs(pd.Timedelta(series[0] - series[-1]).total_seconds()) < 604800 and (self.mask is None):
             return pd.DataFrame()
+
         # Generate linear encoding vector
         week_lin = np.array(series.dt.dayofweek / 7 + series.dt.hour / 168 - 0.5) / 0.3
+
         # Check if the variance of values too small for day encoding
         if np.std(week_lin) < 0.7 and (self.mask is None):
             return pd.DataFrame()
+
         # Generate SIN, COS and weekend encoding vectors
         week_sin = np.sin(week_lin * (2 * pi * 0.3)) / 0.7071
         week_cos = np.cos(week_lin * (2 * pi * 0.3)) / 0.7071
+
         # Check if the variance of values too small for week encoding
         if (np.std(week_sin) < 0.8 or np.std(week_cos) < 0.8) and (self.mask is None):
             return pd.DataFrame()
         if (self.mask is not None) and ((name + '_week_lin') not in self.mask):
             return pd.DataFrame()
+
         columns = [name + '_week_lin',
                    name + '_week_sin',
                    name + '_week_cos']
+
         return pd.DataFrame(np.vstack((week_lin, week_sin, week_cos)).T,
                             columns=columns,
                             index=series.values)
 
-    def generate_weekend_feature(self, series: pd.Series, name=''):
+    def generate_weekend_feature(self, series: pd.Series, name='') -> pd.DataFrame:
+
         # Check data type
         if not pd.api.types.is_datetime64_ns_dtype(series):
             return pd.DataFrame()
+
         # Check if the period of observation is too short for week encoding
         if abs(pd.Timedelta(series[0] - series[-1]).total_seconds()) < 604800 and (self.mask is None):
             return pd.DataFrame()
+
         # Generate SIN, COS and weekend encoding vectors
         weekend = (np.array(series.dt.dayofweek) // 5 - 0.2857) / 0.488
+
         # Check if the variance of values too small for weekend encoding
         if np.std(weekend) < 0.7 and (self.mask is None):
             return pd.DataFrame()
         if (self.mask is not None) and ((name + '_is_weekend') not in self.mask):
             return pd.DataFrame()
         columns = [name + '_is_weekend']
-        return pd.DataFrame(weekend,
-                            columns=columns,
-                            index=series.values)
 
-    def generate_year_features(self, series: pd.Series, name=''):
+        return pd.DataFrame(weekend, columns=columns, index=series.values)
+
+    def generate_year_features(self, series: pd.Series, name='') -> pd.DataFrame:
+
         # Check data type
         if not pd.api.types.is_datetime64_ns_dtype(series):
             return pd.DataFrame()
+
         # Check if the period of observation is too short for year encoding
         if abs(pd.Timedelta(series[0] - series[-1]).total_seconds()) < 31536000 and (self.mask is None):
             return pd.DataFrame()
+
         # Generate linear encoding vector
         year_lin = (np.array(series.dt.dayofyear / 366) - 0.5) / 0.3
+
         # Check if the variance of values too small for day encoding
         if np.std(year_lin) < 0.7 and (self.mask is None):
             return pd.DataFrame()
+
         # Generate SIN, COS and weekend encoding vectors
         year_sin = np.sin(year_lin * (2 * pi * 0.3)) / 0.7071
         year_cos = np.cos(year_lin * (2 * pi * 0.3)) / 0.7071
+
         # Check if the variance of values too small for year encoding
         if (np.std(year_sin) < 0.8 or np.std(year_cos) < 0.8) and (self.mask is None):
             return pd.DataFrame()
         if (self.mask is not None) and ((name + '_year_lin') not in self.mask):
             return pd.DataFrame()
+
         columns = [name + '_year_lin', name + '_year_sin', name + '_year_cos']
+
         return pd.DataFrame(np.vstack((year_lin, year_sin, year_cos)).T,
                             columns=columns,
                             index=series.values)
@@ -203,9 +212,10 @@ class TimedataFeatures(object):
 class ShiftFeatures(object):
 
     def __init__(self):
-        mean = 0.0
+        self.mean = 0.0
         self.weights = None
         self.mask = None
+        self.features = None
         return
 
     def assign_mask(self, columns) -> None:
@@ -214,9 +224,10 @@ class ShiftFeatures(object):
             if len(re.findall('_shift', col)) > 0:
                 search = re.split('_shift', col)
                 self.mask.append(int(search[-1]))
+        self.features = np.ndarray((len(self.mask),), dtype=float)
         return
 
-    def generate(self, data: pd.Series, name: str = '', review_period: int = 90, forecast_period: int = 1):
+    def generate(self, data: pd.Series, review_period: int, forecast_period: int, name: str = '') -> pd.DataFrame:
 
         features = pd.DataFrame()
         weights = pd.DataFrame()
@@ -255,17 +266,19 @@ class ShiftFeatures(object):
 
         return features * self.weights
 
-    def get_one_row(self, data: np.array, name: str = ''):
-        features = pd.DataFrame()
+    def get_one_row(self, data: np.array) -> np.array:
+        j = 0
         # Generate short features
         for i in self.mask:
-            features[name + '_shift' + str(i)] = pd.Series(data[-i] - self.mean)
-        return features * self.weights
+            self.features[j] = data[-i] - self.mean
+            j += 1
+        return self.features * self.weights.values
 
 
 class Indicators(object):
 
-    def __init__(self):
+    def __init__(self, name: str):
+        self.name = name
         self.mean = 0.0
         self.weights = None
         self.ema_mask = None
@@ -273,6 +286,9 @@ class Indicators(object):
         self.tma_mask = None
         self.qma_mask = None
         self.is_masked = False
+        self.alphas = None
+        self.columns = None
+        self.drop_columns = list()
         return
 
     def assign_mask(self, columns) -> None:
@@ -298,7 +314,6 @@ class Indicators(object):
         return
 
     def generate(self, data: pd.Series,
-                 name: str = '',
                  review_period: int = 168,
                  forecast_period: int = 1):
 
@@ -340,17 +355,17 @@ class Indicators(object):
         result_qma[0] = ema_buffer
 
         # Columns names
-        columns = [name + '_ema_' + f'{window:.1f}' for window in ema_windows] + \
-                  [name + '_dma_' + f'{window:.1f}' for window in ema_windows] + \
-                  [name + '_tma_' + f'{window:.1f}' for window in ema_windows] + \
-                  [name + '_qma_' + f'{window:.1f}' for window in ema_windows]
+        self.columns = [self.name + '_ema_' + f'{window:.1f}' for window in ema_windows] + \
+                       [self.name + '_dma_' + f'{window:.1f}' for window in ema_windows] + \
+                       [self.name + '_tma_' + f'{window:.1f}' for window in ema_windows] + \
+                       [self.name + '_qma_' + f'{window:.1f}' for window in ema_windows]
 
         # Calculate of EMA, DMA, TMA, QMA
         for i in range(1, data.shape[0]):
-            qma_buffer = qma_buffer * (1 - alphas) + alphas * tma_buffer
-            tma_buffer = tma_buffer * (1 - alphas) + alphas * dma_buffer
-            dma_buffer = dma_buffer * (1 - alphas) + alphas * ema_buffer
             ema_buffer = ema_buffer * (1 - alphas) + alphas * (data[i] - self.mean)
+            dma_buffer = dma_buffer * (1 - alphas) + alphas * ema_buffer
+            tma_buffer = tma_buffer * (1 - alphas) + alphas * dma_buffer
+            qma_buffer = qma_buffer * (1 - alphas) + alphas * tma_buffer
             result_ema[i] = ema_buffer
             result_dma[i] = dma_buffer
             result_tma[i] = tma_buffer
@@ -358,89 +373,62 @@ class Indicators(object):
 
         # Convert result into pandas DaraFrame
         features = pd.DataFrame(np.hstack((result_ema, result_dma, result_tma, result_qma)), index=data.index,
-                                columns=columns)
+                                columns=self.columns)
 
-        # Return in case of non-masked generation
+        # Create drop_columns list
         if self.is_masked:
-            # Clean features by masks in case of masked generation
-            drop_columns = set()
+            # Create drop_columns list
+            remaining_columns = set()
             if self.ema_mask is not None:
-                drop_columns.update([name + '_ema_' + f'{window:.1f}' for window in self.ema_mask])
+                remaining_columns.update([self.name + '_ema_' + f'{window:.1f}' for window in self.ema_mask])
             if self.dma_mask is not None:
-                drop_columns.update([name + '_dma_' + f'{window:.1f}' for window in self.dma_mask])
+                remaining_columns.update([self.name + '_dma_' + f'{window:.1f}' for window in self.dma_mask])
             if self.tma_mask is not None:
-                drop_columns.update([name + '_tma_' + f'{window:.1f}' for window in self.tma_mask])
+                remaining_columns.update([self.name + '_tma_' + f'{window:.1f}' for window in self.tma_mask])
             if self.qma_mask is not None:
-                drop_columns.update([name + '_qma_' + f'{window:.1f}' for window in self.qma_mask])
-            for col in features.columns:
-                if col not in drop_columns:
-                    features.drop(col, axis=1, inplace=True)
+                remaining_columns.update([self.name + '_qma_' + f'{window:.1f}' for window in self.qma_mask])
+            for col in self.columns:
+                if col not in remaining_columns:
+                    self.drop_columns.append(col)
+            features.drop(self.drop_columns, axis=1, inplace=True)
 
         # Get weights
-        self.weights = get_corr_weights(features, data).iloc[0]
+        self.weights = get_corr_weights(features, data)
 
-        # Store buffers
+        # Store buffers, alphas and columns
         self.ema_buffer = ema_buffer
         self.dma_buffer = dma_buffer
         self.tma_buffer = tma_buffer
         self.qma_buffer = qma_buffer
+        self.alphas = alphas
+        self.bin_mask = self.get_bin_mask()
 
         return features * self.weights
 
     # Calculation of single rows of features
-    def get_one_row(self, y: float, name: str = ''):
-
-        # Calculate windows and alphas for EMA, DMA, TMA, QMA
-        general_mask = set()
-        if self.ema_mask is not None:
-            general_mask.update(self.ema_mask)
-        if self.dma_mask is not None:
-            general_mask.update(self.dma_mask)
-        if self.tma_mask is not None:
-            general_mask.update(self.tma_mask)
-        if self.qma_mask is not None:
-            general_mask.update(self.qma_mask)
-        ema_windows = list(general_mask)
-        ema_windows.sort()
-        ema_windows = np.array(ema_windows)
-        alphas = 2 / (ema_windows + 1)
-
-        # Columns names
-        columns = [name + '_ema_' + f'{window:.1f}' for window in ema_windows] + \
-                  [name + '_dma_' + f'{window:.1f}' for window in ema_windows] + \
-                  [name + '_tma_' + f'{window:.1f}' for window in ema_windows] + \
-                  [name + '_qma_' + f'{window:.1f}' for window in ema_windows]
-
+    def get_one_row(self, y: float) -> np.array:
         # Calculate EMA, DMA, TMA, QMA
-        self.qma_buffer = self.qma_buffer * (1 - alphas) + alphas * self.tma_buffer
-        self.tma_buffer = self.tma_buffer * (1 - alphas) + alphas * self.dma_buffer
-        self.dma_buffer = self.dma_buffer * (1 - alphas) + alphas * self.ema_buffer
-        self.ema_buffer = self.ema_buffer * (1 - alphas) + alphas * (y - self.mean)
+        self.ema_buffer = self.ema_buffer * (1 - self.alphas) + self.alphas * (y - self.mean)
+        self.dma_buffer = self.dma_buffer * (1 - self.alphas) + self.alphas * self.ema_buffer
+        self.tma_buffer = self.tma_buffer * (1 - self.alphas) + self.alphas * self.dma_buffer
+        self.qma_buffer = self.qma_buffer * (1 - self.alphas) + self.alphas * self.tma_buffer
 
-        # Convert result into pandas DaraFrame
-        features = pd.Series(
-            np.hstack((self.ema_buffer, self.dma_buffer, self.tma_buffer, self.qma_buffer)),
-            index=columns)
+        return np.delete(np.hstack((self.ema_buffer, self.dma_buffer, self.tma_buffer, self.qma_buffer)),
+                         self.bin_mask) * self.weights.values
 
-        # Clean features by masks in case of masked generation
-        drop_columns = set()
-        if self.ema_mask is not None:
-            drop_columns.update([name + '_ema_' + f'{window:.1f}' for window in self.ema_mask])
-        if self.dma_mask is not None:
-            drop_columns.update([name + '_dma_' + f'{window:.1f}' for window in self.dma_mask])
-        if self.tma_mask is not None:
-            drop_columns.update([name + '_tma_' + f'{window:.1f}' for window in self.tma_mask])
-        if self.qma_mask is not None:
-            drop_columns.update([name + '_qma_' + f'{window:.1f}' for window in self.qma_mask])
-        for col in features.index:
-            if col not in drop_columns:
-                features.drop(col, inplace=True)
-
-        return features * self.weights
+    def get_bin_mask(self):
+        mask = np.ndarray((len(self.columns),), dtype=bool)
+        drop_columns_set = set(self.drop_columns)
+        for i in range(len(self.columns)):
+            if self.columns[i] in drop_columns_set:
+                mask[i] = True
+            else:
+                mask[i] = False
+        return mask
 
 
 def get_corr_weights(data: pd.DataFrame, y: pd.Series):
     weights = pd.DataFrame()
-    for nm, col in data.iteritems():
-        weights[nm] = pd.Series(abs(np.corrcoef(y.values, col.values)[0, 1]) / col.std())
-    return weights
+    for name, col in data.iteritems():
+        weights[name] = pd.Series(abs(np.corrcoef(y.values, col.values)[0, 1]) / col.std())
+    return weights.iloc[0]

@@ -1,8 +1,9 @@
 import pandas as pd
-from base_model import *
-from feature_generation import *
-from feature_selection import *
-from optimization import *
+import numpy as np
+from base_model import ShBaseModel
+from feature_generation import TimedataFeatures, ShiftFeatures, Indicators
+from feature_selection import l1_feature_select
+from optimization import get_best_l2_alpha
 from sklearn.model_selection import cross_val_score
 from sklearn.linear_model import SGDRegressor
 
@@ -25,8 +26,8 @@ class ShLinearModel(ShBaseModel):
         self.timedata_features_obj = TimedataFeatures()
         timedata_features = self.timedata_features_obj.generate(self.X, y)
 
-        self.indicators_obj = Indicators()
-        indicators = self.indicators_obj.generate(y, name='y',
+        self.indicators_obj = Indicators(name='y')
+        indicators = self.indicators_obj.generate(y,
                                                   review_period=self.review_period,
                                                   forecast_period=self.forecast_period)
 
@@ -62,7 +63,7 @@ class ShLinearModel(ShBaseModel):
 
         timedata_features = self.timedata_features_obj.generate(self.X, y)
 
-        indicators = self.indicators_obj.generate(y, name='y',
+        indicators = self.indicators_obj.generate(y,
                                                   review_period=self.review_period,
                                                   forecast_period=self.forecast_period)
 
@@ -79,7 +80,7 @@ class ShLinearModel(ShBaseModel):
                                          max_iter=50000,
                                          alpha=self.lr_alpha)
 
-        self.linear_model.fit(self.X[self.review_period:], y[self.review_period:])
+        self.linear_model.fit(self.X[self.review_period:].values, y[self.review_period:])
 
         return self
 
@@ -97,35 +98,22 @@ class ShLinearModel(ShBaseModel):
         self.X_pred = pd.DataFrame(index=index)
 
         # Join timedata features
-        timedata_features = self.timedata_features_obj.generate(self.X_pred, y=None,
-                                                                calculate_weights=False)
-
+        timedata_features = self.timedata_features_obj.generate(self.X_pred, y=None, calculate_weights=False)
         self.X_pred = self.X_pred.join(timedata_features)
 
         # Join linear features
-        self.X_pred = self.X_pred.join(X_additive_features)
-
-        # Add columns for shift features and indicators
-        self.X_pred[self.shift_features_obj.get_one_row(data=y, name='y').columns] = None
-
-        indicators_row = self.indicators_obj.get_one_row(y=y[-1], name='y')
-
-        self.X_pred[indicators_row.index.tolist()] = None
+        self.X_pred = self.X_pred.join(X_additive_features[self.linear_features])
 
         # Step by step predict
         for i in range(0, forecast_period):
             # Add one row of shift features
-            shift_row = self.shift_features_obj.get_one_row(data=y, name='y')
-
-            self.X_pred.loc[self.X_pred.index[i], shift_row.columns.tolist()] = shift_row.iloc[0]
-
+            shift_row = self.shift_features_obj.get_one_row(data=y)
             # Add one row of indicators
-            indicators_row = self.indicators_obj.get_one_row(y=y[-1], name='y')
-
-            self.X_pred.loc[self.X_pred.index[i], indicators_row.index.tolist()] = indicators_row
-
+            indicators_row = self.indicators_obj.get_one_row(y=y[-1])
             # Predict and add value to the result
-            y = np.append(y, self.linear_model.predict(self.X_pred.iloc[[i]]))
+            y = np.append(y, self.linear_model.predict(
+                np.hstack((self.X_pred.iloc[i].values, shift_row, indicators_row)).reshape(1, -1)
+            ))
 
         return pd.DataFrame(y[-forecast_period:], index=self.X_pred.index)
 
