@@ -8,20 +8,15 @@ class ShBaseModel(object):
         self.review_period = review_period
         self.forecast_period = forecast_period
         self.random_state = random_state
-        self.linear_features = []
-        self.mean = 0.0
-        self.y = pd.Series()
-        self.X = pd.DataFrame()
-        self.lr_alpha = 0.001
-        self.X_pred = pd.DataFrame()
         return
 
-    def fit(self, X: pd.DataFrame, y: pd.Series, additive_features: list = None, cv=16, verbose=False):
+    def fit(self, X: pd.DataFrame, y: pd.Series, additive_features: list = None, verbose=False, elaboration_level=1):
         """
         :param X: (pd.DataFrame, shape (n_samples, n_features)): the input data
         :param y: (pd.DataFrame, shape (n_samples, )): the target data
         :param additive_features: list of external user features
-        :param cv: number of cross-validation folds
+        :param elaboration_level: how accurate model optimisation should be
+                (less value - fast fit, greater value - careful hyperparameters optimisation)
         :param verbose: Enable verbose output.
         Return:
             model (Class)
