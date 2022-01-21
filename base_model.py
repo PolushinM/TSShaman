@@ -5,6 +5,7 @@ import numpy as np
 class ShBaseModel(object):
 
     def __init__(self, review_period, forecast_period=1, random_state=0):
+        self.X = None
         self.review_period = review_period
         self.forecast_period = forecast_period
         self.random_state = random_state
@@ -35,4 +36,4 @@ class ShBaseModel(object):
 
     @property
     def step_time(self):
-        return self.X.index.to_series()[1] - self.X.index.to_series()[0]
+        return self.X.index[1] - self.X.index[0]

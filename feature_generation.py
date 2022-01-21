@@ -5,7 +5,299 @@ from typing import Union
 from math import pi
 
 
-class TimedataFeatures(object):
+class ShiftFeaturesBaseHost(object):
+
+    def __init__(self,
+                 review_period: int,
+                 forecast_period: int,
+                 name: str = ''):
+
+        self.review_period = review_period
+        self.forecast_period = forecast_period
+        self.name = name
+        self.mean = 0.0
+        self.std = 1.0
+        self.weights = None
+        self.mask = None
+        self.corrcoef_power = 0.5
+        return
+
+    def assign_mask(self, columns) -> None:
+        self.mask = []
+        for col in columns:
+            if len(re.findall('_shift', col)) > 0:
+                search = re.split('_shift', col)
+                lag = int(search[-1])
+                self.conditional_append_mask(lag)
+        return
+
+    def generate(self, data: pd.Series) -> pd.DataFrame:
+
+        self.mean = data.mean()
+        self.std = data.std()
+
+        lags = self.lag_list
+        if len(lags) == 0:
+            return pd.DataFrame()
+        features, self.weights = self.calculate_features_and_weights(data, lags)
+
+        return features * self.weights
+
+    def calculate_features_and_weights(self, data, lags):
+        features = pd.DataFrame()
+        weights = pd.DataFrame()
+        for lag in lags:
+            shifted_data = data.shift(lag, fill_value=self.mean)
+            weights[self.name + '_shift' + str(lag)] = pd.Series(self.calculate_weight(data, shifted_data, lag))
+            features[self.name + '_shift' + str(lag)] = shifted_data - self.mean
+        return features, weights.iloc[0]
+
+    def get_one_row(self, data: np.array) -> np.array:
+        # This is a key function that must be performed very fast
+        i: int = 0
+        features_row = np.ndarray((len(self.mask),), dtype=float)
+        for lag in self.mask:
+            features_row[i] = data[-lag] - self.mean
+            i += 1
+        return features_row * self.weights.values
+
+    @property
+    def lag_list(self):
+        # Filling feature periods (lags) lists
+        if self.mask is None:
+            lags = self.generate_initial_lags()
+        else:
+            lags = self.generate_masked_lags()
+        return lags
+
+    def conditional_append_mask(self, lag):
+        """Pure virtual function, appends mask by lag if it satisfies the condition"""
+        raise NotImplementedError()
+
+    def calculate_weight(self, data, shifted_data, lag):
+        """Pure virtual function"""
+        raise NotImplementedError()
+
+    def generate_initial_lags(self) -> list:
+        """Pure virtual function"""
+        raise NotImplementedError()
+
+    def generate_masked_lags(self) -> list:
+        """Pure virtual function"""
+        raise NotImplementedError()
+
+
+class LongShiftFeaturesHost(ShiftFeaturesBaseHost):
+
+    def conditional_append_mask(self, lag):
+        if lag >= self.forecast_period:
+            self.mask.append(lag)
+
+    def calculate_weight(self, data, shifted_data, lag):
+        return abs(np.corrcoef(data.values, shifted_data.values)[0, 1]) ** self.corrcoef_power / self.std
+
+    def generate_initial_lags(self) -> list:
+        return list(range(self.forecast_period, self.review_period + 1))
+
+    def generate_masked_lags(self) -> list:
+        lags = []
+        for i in self.mask:
+            if i >= self.forecast_period:
+                lags.append(i)
+        return lags
+
+
+class ShortShiftFeaturesHost(ShiftFeaturesBaseHost):
+
+    lag_weight_power = 0.5
+
+    def conditional_append_mask(self, lag):
+        if lag < self.forecast_period:
+            self.mask.append(lag)
+
+    def calculate_weight(self, data, shifted_data, lag):
+        return abs(np.corrcoef(data.values, shifted_data.values)[0, 1])**self.corrcoef_power \
+               * (lag / self.forecast_period)**self.lag_weight_power / self.std
+
+    def generate_initial_lags(self) -> list:
+        return list(range(1, self.forecast_period))
+
+    def generate_masked_lags(self) -> list:
+        lags = []
+        for i in self.mask:
+            if i < self.forecast_period:
+                lags.append(i)
+        return lags
+
+
+class MovingAverageFeaturesHost(object):
+
+    def __init__(self,
+                 review_period: int,
+                 forecast_period: int,
+                 name: str = '',
+                 ema_number=32,
+                 short_ema_divisor=6,
+                 ema_step_multiplier=8):
+
+        self.review_period = review_period
+        self.forecast_period = forecast_period
+        self.name = name
+        self.ema_number = ema_number
+        self.short_ema_divisor = short_ema_divisor
+        self.ema_step_multiplier = ema_step_multiplier
+        self.ema_windows = self.__full_ema_windows
+        self.alphas = 2 / (self.ema_windows + 1)
+        self.is_mask_used = False
+        self.masks = (list(self.ema_windows), list(self.ema_windows), list(self.ema_windows), list(self.ema_windows))
+        self.mean = 0.0
+        self.ema_buffer = None
+        self.dma_buffer = None
+        self.tma_buffer = None
+        self.qma_buffer = None
+        self.weights = None
+        self.__bin_mask = None
+        return
+
+    def assign_masks(self, columns) -> None:
+        self.is_mask_used = True
+        self.masks = self.__parse_masks(columns)
+        self.ema_windows = self.__masked_ema_windows
+        self.alphas = 2 / (self.ema_windows + 1)
+        self.__bin_mask = self.__get_bin_mask()
+        return
+
+    def generate(self, data: pd.Series):
+        self.mean = data.mean()
+
+        # Memory allocation for resulting values
+        result_ema = np.ndarray((data.shape[0], len(self.alphas)), dtype=float)
+        result_dma = np.ndarray((data.shape[0], len(self.alphas)), dtype=float)
+        result_tma = np.ndarray((data.shape[0], len(self.alphas)), dtype=float)
+        result_qma = np.ndarray((data.shape[0], len(self.alphas)), dtype=float)
+
+        # Fill buffer vectors
+        self.ema_buffer = np.ones((len(self.alphas),), dtype=float) * (data.iloc[0] - self.mean)
+        self.dma_buffer = self.ema_buffer
+        self.tma_buffer = self.ema_buffer
+        self.qma_buffer = self.ema_buffer
+        result_ema[0] = self.ema_buffer
+        result_dma[0] = self.ema_buffer
+        result_tma[0] = self.ema_buffer
+        result_qma[0] = self.ema_buffer
+
+        # Calculation of EMA, DMA, TMA, QMA
+        for i in range(1, data.shape[0]):
+            self.ema_buffer = self.ema_buffer * (1 - self.alphas) + self.alphas * (data[i] - self.mean)
+            self.dma_buffer = self.dma_buffer * (1 - self.alphas) + self.alphas * self.ema_buffer
+            self.tma_buffer = self.tma_buffer * (1 - self.alphas) + self.alphas * self.dma_buffer
+            self.qma_buffer = self.qma_buffer * (1 - self.alphas) + self.alphas * self.tma_buffer
+            result_ema[i] = self.ema_buffer
+            result_dma[i] = self.dma_buffer
+            result_tma[i] = self.tma_buffer
+            result_qma[i] = self.qma_buffer
+
+        # Convert result into pandas DaraFrame
+        features = pd.DataFrame(np.hstack((result_ema, result_dma, result_tma, result_qma)),
+                                index=data.index,
+                                columns=self.non_filtered_columns)
+
+        # Drop redundant columns
+        features.drop(self.columns_to_drop, axis=1, inplace=True)
+
+        # Get weights and return
+        if features.empty:
+            self.weights = pd.Series()
+            return pd.DataFrame()
+        else:
+            self.weights = get_corr_weights(features, data)
+            return features * self.weights
+
+    def get_one_row(self, y: float) -> np.array:
+        # Calculation of single rows of features
+        # This is a key function that must be performed very fast
+        self.ema_buffer = self.ema_buffer * (1 - self.alphas) + self.alphas * (y - self.mean)
+        self.dma_buffer = self.dma_buffer * (1 - self.alphas) + self.alphas * self.ema_buffer
+        self.tma_buffer = self.tma_buffer * (1 - self.alphas) + self.alphas * self.dma_buffer
+        self.qma_buffer = self.qma_buffer * (1 - self.alphas) + self.alphas * self.tma_buffer
+
+        return np.delete(np.hstack((self.ema_buffer, self.dma_buffer, self.tma_buffer, self.qma_buffer)),
+                         self.__bin_mask) * self.weights.values
+
+    def __parse_masks(self, columns):
+        # Get list of features, remaining after feature selection
+        ema_mask = list()
+        dma_mask = list()
+        tma_mask = list()
+        qma_mask = list()
+        for col in columns:
+            if len(re.findall('_ema_', col)) > 0:
+                search = re.split('_ema_', col)
+                ema_mask.append(round(float(search[-1]), 1))
+            if len(re.findall('_dma_', col)) > 0:
+                search = re.split('_dma_', col)
+                dma_mask.append(round(float(search[-1]), 1))
+            if len(re.findall('_tma_', col)) > 0:
+                search = re.split('_tma_', col)
+                tma_mask.append(round(float(search[-1]), 1))
+            if len(re.findall('_qma_', col)) > 0:
+                search = re.split('_qma_', col)
+                qma_mask.append(round(float(search[-1]), 1))
+        return ema_mask, dma_mask, tma_mask, qma_mask
+
+    def __get_bin_mask(self):
+        mask = np.ndarray((len(self.non_filtered_columns),), dtype=bool)
+        drop_columns_set = set(self.columns_to_drop)
+        for i in range(len(self.non_filtered_columns)):
+            if self.non_filtered_columns[i] in drop_columns_set:
+                mask[i] = True
+            else:
+                mask[i] = False
+        return mask
+
+    @property
+    def __full_ema_windows(self):
+
+        ema_step = (self.review_period /
+                    self.forecast_period *
+                    self.ema_step_multiplier) ** (1 / (self.ema_number - 1))
+
+        ema_windows = np.array([self.forecast_period / self.short_ema_divisor * ema_step ** i
+                                for i in range(self.ema_number)])
+
+        return ema_windows
+
+    @property
+    def __masked_ema_windows(self):
+        general_mask = set()
+        for item in self.masks:
+            general_mask.update(item)
+        ema_windows = list(general_mask)
+        ema_windows.sort()
+        return np.array(self.ema_windows)
+
+    @property
+    def non_filtered_columns(self):
+        return [self.name + '_ema_' + f'{window:.1f}' for window in self.ema_windows] + \
+               [self.name + '_dma_' + f'{window:.1f}' for window in self.ema_windows] + \
+               [self.name + '_tma_' + f'{window:.1f}' for window in self.ema_windows] + \
+               [self.name + '_qma_' + f'{window:.1f}' for window in self.ema_windows]
+
+    @property
+    def columns_to_drop(self):
+        remaining_columns = set()
+        columns_to_drop = list()
+        remaining_columns.update([self.name + '_ema_' + f'{window:.1f}' for window in self.masks[0]])
+        remaining_columns.update([self.name + '_dma_' + f'{window:.1f}' for window in self.masks[1]])
+        remaining_columns.update([self.name + '_tma_' + f'{window:.1f}' for window in self.masks[2]])
+        remaining_columns.update([self.name + '_qma_' + f'{window:.1f}' for window in self.masks[3]])
+        for col in self.non_filtered_columns:
+            if col not in remaining_columns:
+                columns_to_drop.append(col)
+        return columns_to_drop
+
+
+class TimedataFeaturesHost(object):
 
     def __init__(self):
         self.weights = None
@@ -13,13 +305,10 @@ class TimedataFeatures(object):
         return
 
     def assign_mask(self, columns) -> None:
-        timedata_set = {'index_hour_lin', 'index_hour_sin',
-                        'index_hour_cos', 'index_day_lin',
-                        'index_day_sin', 'index_day_cos',
-                        'index_week_lin', 'index_week_sin',
-                        'index_week_cos', 'index_is_weekend',
-                        'index_year_lin', 'index_year_sin',
-                        'index_year_cos'}
+        timedata_set = {'index_hour_lin', 'index_hour_sin', 'index_hour_cos',
+                        'index_day_lin', 'index_day_sin', 'index_day_cos',
+                        'index_week_lin', 'index_week_sin', 'index_week_cos', 'index_is_weekend',
+                        'index_year_lin', 'index_year_sin', 'index_year_cos'}
         self.mask = set()
         for col in columns:
             if col in timedata_set:
@@ -210,249 +499,8 @@ class TimedataFeatures(object):
                             index=series.values)
 
 
-class ShiftFeatures(object):
-
-    def __init__(self,
-                 review_period: int,
-                 forecast_period: int,
-                 name: str = ''):
-
-        self.review_period = review_period
-        self.forecast_period = forecast_period
-        self.name = name
-        self.mean = 0.0
-        self.std = 1.0
-        self.weights = None
-        self.mask = None
-        return
-
-    def assign_mask(self, columns) -> None:
-        self.mask = []
-        for col in columns:
-            if len(re.findall('_shift', col)) > 0:
-                search = re.split('_shift', col)
-                self.mask.append(int(search[-1]))
-        return
-
-    def generate(self, data: pd.Series) -> pd.DataFrame:
-
-        self.mean = data.mean()
-        self.std = data.std()
-
-        short_lags, long_lags = self.lag_lists
-        short_features, short_weights = self.generate_short_features(data, short_lags)
-        long_features, long_weights = self.generate_long_features(data, long_lags)
-
-        features = short_features.join(long_features)
-        self.weights = short_weights.join(long_weights).iloc[0]
-
-        return features * self.weights
-
-    def generate_short_features(self, data, lags):
-        features = pd.DataFrame()
-        weights = pd.DataFrame()
-        for lag in lags:
-            shifted_data = data.shift(lag, fill_value=self.mean)
-            weights[self.name + '_shift' + str(lag)] = pd.Series(
-                abs(np.corrcoef(data.values, shifted_data.values)[0, 1]) *
-                (lag / self.forecast_period)**0.3 / self.std)
-            features[self.name + '_shift' + str(lag)] = shifted_data - self.mean
-        return features, weights
-
-    def generate_long_features(self, data, lags):
-        features = pd.DataFrame()
-        weights = pd.DataFrame()
-        for lag in lags:
-            shifted_data = data.shift(lag, fill_value=self.mean)
-            weights[self.name + '_shift' + str(lag)] = pd.Series(
-                abs(np.corrcoef(data.values, shifted_data.values)[0, 1]) / self.std)
-            features[self.name + '_shift' + str(lag)] = shifted_data - self.mean
-        return features, weights
-
-    def get_one_row(self, data: np.array) -> np.array:
-        i = 0
-        features_row = np.ndarray((len(self.mask),), dtype=float)
-        for lag in self.mask:
-            features_row[i] = data[-lag] - self.mean
-            i += 1
-        return features_row * self.weights.values
-
-    @property
-    def lag_lists(self):
-        # Filling feature periods (lags) lists
-        short_lags = []
-        long_lags = []
-        if self.mask is None:
-            short_lags = list(range(1, self.forecast_period))
-            long_lags = list(range(self.forecast_period, self.review_period + 1))
-        else:
-            for i in self.mask:
-                if i < self.forecast_period:
-                    short_lags.append(i)
-                else:
-                    long_lags.append(i)
-        return short_lags, long_lags
-
-
-class MovingAverageFeatures(object):
-
-    def __init__(self,
-                 review_period: int,
-                 forecast_period: int,
-                 name: str = ''):
-
-        self.review_period = review_period
-        self.forecast_period = forecast_period
-        self.name = name
-        self.ema_windows = self.__full_ema_windows
-        self.alphas = 2 / (self.ema_windows + 1)
-        self.is_mask_used = False
-        self.masks = (list(self.ema_windows), list(self.ema_windows), list(self.ema_windows), list(self.ema_windows))
-        self.mean = 0.0
-        self.ema_buffer = None
-        self.dma_buffer = None
-        self.tma_buffer = None
-        self.qma_buffer = None
-        self.weights = None
-        self.__bin_mask = None
-        return
-
-    def assign_masks(self, columns) -> None:
-        self.is_mask_used = True
-        self.masks = self.__parse_masks(columns)
-        self.ema_windows = self.__masked_ema_windows
-        self.alphas = 2 / (self.ema_windows + 1)
-        self.__bin_mask = self.__get_bin_mask()
-        return
-
-    def generate(self, data: pd.Series):
-        self.mean = data.mean()
-
-        # Memory allocation for resulting values
-        result_ema = np.ndarray((data.shape[0], len(self.alphas)), dtype=float)
-        result_dma = np.ndarray((data.shape[0], len(self.alphas)), dtype=float)
-        result_tma = np.ndarray((data.shape[0], len(self.alphas)), dtype=float)
-        result_qma = np.ndarray((data.shape[0], len(self.alphas)), dtype=float)
-
-        # Fill buffer vectors
-        self.ema_buffer = np.ones((len(self.alphas),), dtype=float) * (data.iloc[0] - self.mean)
-        self.dma_buffer = self.ema_buffer
-        self.tma_buffer = self.ema_buffer
-        self.qma_buffer = self.ema_buffer
-        result_ema[0] = self.ema_buffer
-        result_dma[0] = self.ema_buffer
-        result_tma[0] = self.ema_buffer
-        result_qma[0] = self.ema_buffer
-
-        # Calculation of EMA, DMA, TMA, QMA
-        for i in range(1, data.shape[0]):
-            self.ema_buffer = self.ema_buffer * (1 - self.alphas) + self.alphas * (data[i] - self.mean)
-            self.dma_buffer = self.dma_buffer * (1 - self.alphas) + self.alphas * self.ema_buffer
-            self.tma_buffer = self.tma_buffer * (1 - self.alphas) + self.alphas * self.dma_buffer
-            self.qma_buffer = self.qma_buffer * (1 - self.alphas) + self.alphas * self.tma_buffer
-            result_ema[i] = self.ema_buffer
-            result_dma[i] = self.dma_buffer
-            result_tma[i] = self.tma_buffer
-            result_qma[i] = self.qma_buffer
-
-        # Convert result into pandas DaraFrame
-        features = pd.DataFrame(np.hstack((result_ema, result_dma, result_tma, result_qma)),
-                                index=data.index,
-                                columns=self.columns)
-
-        # Drop redundant columns
-        features.drop(self.columns_to_drop, axis=1, inplace=True)
-
-        # Get weights
-        if features.empty:
-            self.weights = pd.Series()
-            return pd.DataFrame()
-        else:
-            self.weights = get_corr_weights(features, data)
-            return features * self.weights
-
-    def get_one_row(self, y: float) -> np.array:
-        # Calculation of single rows of features
-        self.ema_buffer = self.ema_buffer * (1 - self.alphas) + self.alphas * (y - self.mean)
-        self.dma_buffer = self.dma_buffer * (1 - self.alphas) + self.alphas * self.ema_buffer
-        self.tma_buffer = self.tma_buffer * (1 - self.alphas) + self.alphas * self.dma_buffer
-        self.qma_buffer = self.qma_buffer * (1 - self.alphas) + self.alphas * self.tma_buffer
-
-        return np.delete(np.hstack((self.ema_buffer, self.dma_buffer, self.tma_buffer, self.qma_buffer)),
-                         self.__bin_mask) * self.weights.values
-
-    def __parse_masks(self, columns):
-        # Get list of features, remaining after feature selection
-        ema_mask = list()
-        dma_mask = list()
-        tma_mask = list()
-        qma_mask = list()
-        for col in columns:
-            if len(re.findall('_ema_', col)) > 0:
-                search = re.split('_ema_', col)
-                ema_mask.append(round(float(search[-1]), 1))
-            if len(re.findall('_dma_', col)) > 0:
-                search = re.split('_dma_', col)
-                dma_mask.append(round(float(search[-1]), 1))
-            if len(re.findall('_tma_', col)) > 0:
-                search = re.split('_tma_', col)
-                tma_mask.append(round(float(search[-1]), 1))
-            if len(re.findall('_qma_', col)) > 0:
-                search = re.split('_qma_', col)
-                qma_mask.append(round(float(search[-1]), 1))
-        return ema_mask, dma_mask, tma_mask, qma_mask
-
-    def __get_bin_mask(self):
-        mask = np.ndarray((len(self.columns),), dtype=bool)
-        drop_columns_set = set(self.columns_to_drop)
-        for i in range(len(self.columns)):
-            if self.columns[i] in drop_columns_set:
-                mask[i] = True
-            else:
-                mask[i] = False
-        return mask
-
-    @property
-    def __full_ema_windows(self):
-        ema_number = 32
-        short_ema_divisor = 4
-        ema_step_multiplier = 5
-        ema_step = (self.review_period / self.forecast_period * ema_step_multiplier) ** (1 / (ema_number-1))
-        ema_windows = np.array([self.forecast_period / short_ema_divisor * ema_step ** i for i in range(ema_number)])
-        return ema_windows
-
-    @property
-    def __masked_ema_windows(self):
-        general_mask = set()
-        for item in self.masks:
-            general_mask.update(item)
-        ema_windows = list(general_mask)
-        ema_windows.sort()
-        return np.array(self.ema_windows)
-
-    @property
-    def columns(self):
-        return [self.name + '_ema_' + f'{window:.1f}' for window in self.ema_windows] + \
-               [self.name + '_dma_' + f'{window:.1f}' for window in self.ema_windows] + \
-               [self.name + '_tma_' + f'{window:.1f}' for window in self.ema_windows] + \
-               [self.name + '_qma_' + f'{window:.1f}' for window in self.ema_windows]
-
-    @property
-    def columns_to_drop(self):
-        remaining_columns = set()
-        columns_to_drop = list()
-        remaining_columns.update([self.name + '_ema_' + f'{window:.1f}' for window in self.masks[0]])
-        remaining_columns.update([self.name + '_dma_' + f'{window:.1f}' for window in self.masks[1]])
-        remaining_columns.update([self.name + '_tma_' + f'{window:.1f}' for window in self.masks[2]])
-        remaining_columns.update([self.name + '_qma_' + f'{window:.1f}' for window in self.masks[3]])
-        for col in self.columns:
-            if col not in remaining_columns:
-                columns_to_drop.append(col)
-        return columns_to_drop
-
-
-def get_corr_weights(X: pd.DataFrame, y: pd.Series):
+def get_corr_weights(X: pd.DataFrame, y: pd.Series, corrcoef_power=0.5):
     weights = pd.DataFrame()
     for name, col in X.iteritems():
-        weights[name] = pd.Series(abs(np.corrcoef(y.values, col.values)[0, 1]) / col.std())
+        weights[name] = pd.Series(abs(np.corrcoef(y.values, col.values)[0, 1]) ** corrcoef_power / col.std())
     return weights.iloc[0]

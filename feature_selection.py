@@ -2,9 +2,44 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import GridSearchCV, cross_val_score
 from sklearn.linear_model import SGDRegressor
+from optimization import get_best_l1_alpha
 
 
-def l1_feature_select(X: pd.DataFrame, y, strength=0.002, cv=10, random_state=0):
+def l1_feature_select(X: pd.DataFrame, y, strength, cv, random_state):
+    X_std = X / X.std()
+    best_alpha, best_score = get_best_l1_alpha(X_std, y, cv=cv, random_state=random_state)
+    sgd_score = 1.0
+
+    while sgd_score > best_score * (1 - strength):
+        best_alpha *= 1.25
+        sgd_score = cross_val_score(SGDRegressor(penalty='l1',
+                                                 alpha=best_alpha,
+                                                 eta0=0.005,
+                                                 power_t=0.25,
+                                                 max_iter=10000,
+                                                 random_state=random_state),
+                                    X_std, y, cv=cv).mean()
+
+    model = SGDRegressor(penalty='l1',
+                         alpha=best_alpha,
+                         eta0=0.005,
+                         power_t=0.25,
+                         max_iter=10000,
+                         random_state=random_state)
+
+    model.fit(X_std, y)
+    drop_features = []
+    columns = X.columns
+    for i in range(len(model.coef_)):
+        if abs(model.coef_[i]) < 0.002:
+            drop_features.append(columns[i])
+    print(f'sgd_score={sgd_score:.4f}')
+    print(len(drop_features))
+
+    return drop_features, best_alpha
+
+
+def l1_feature_select_old(X: pd.DataFrame, y, strength=0.002, cv=10, random_state=0):
     alphas = [0.0005 * 3 ** i for i in range(20)]
     clf = GridSearchCV(
         estimator=SGDRegressor(penalty='l1',

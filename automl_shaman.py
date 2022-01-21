@@ -21,14 +21,14 @@ class TSShaman(object):
             omega=0.001,
             elaboration_level=1):
 
-        linear_alpha_multiplier = 0.8 + 2000*omega  # R^2=0.8685-0.0000545*alpha_mult
-        linear_feature_selection_strength = 0.1*omega  # R^2=0.8685 - strength; R^2 = 0.87-0.1*omega
+        linear_alpha_multiplier = 1.0 + 2500*omega  # R^2=0.8685-0.0000545*alpha_mult
+        linear_feature_selection_strength = 0.2*omega  # R^2=0.8685 - strength; R^2 = 0.87-0.1*omega
 
         self.sh_linear_model.fit(X, y,
                                  linear_features,
                                  cv,
                                  verbose,
-                                 alpha_mult=linear_alpha_multiplier,
+                                 alpha_multiplier=linear_alpha_multiplier,
                                  feature_selection_strength=linear_feature_selection_strength)
         return self
 
