@@ -5,11 +5,11 @@ from cross_validation import *
 
 class TSShaman(object):
 
-    def __init__(self, review_period, forecast_period=1, random_state=0):
+    def __init__(self, review_period, forecast_horizon=1, random_state=0):
         self.review_period = review_period
-        self.forecast_period = forecast_period
+        self.forecast_horizon = forecast_horizon
         self.random_state = random_state
-        self.sh_linear_model = ShLinearModel(review_period, forecast_period, random_state)
+        self.sh_linear_model = ShLinearModel(review_period, forecast_horizon, random_state)
 
     def fit(self, X: pd.DataFrame,
             y: pd.Series,
@@ -19,10 +19,10 @@ class TSShaman(object):
             cv=16,
             verbose=False,
             omega=0.001,
-            elaboration_level=1):
+            qualification_level=1):
 
-        linear_alpha_multiplier = 1.0 + 2500*omega  # R^2=0.8685-0.0000545*alpha_mult
-        linear_feature_selection_strength = 0.2*omega  # R^2=0.8685 - strength; R^2 = 0.87-0.1*omega
+        linear_alpha_multiplier = 1.0 + 2000*omega
+        linear_feature_selection_strength = 0.2*omega
 
         self.sh_linear_model.fit(X, y,
                                  linear_features,

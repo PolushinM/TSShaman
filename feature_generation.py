@@ -9,11 +9,11 @@ class ShiftFeaturesBaseHost(object):
 
     def __init__(self,
                  review_period: int,
-                 forecast_period: int,
+                 forecast_horizon: int,
                  name: str = ''):
 
         self.review_period = review_period
-        self.forecast_period = forecast_period
+        self.forecast_horizon = forecast_horizon
         self.name = name
         self.mean = 0.0
         self.std = 1.0
@@ -90,19 +90,19 @@ class ShiftFeaturesBaseHost(object):
 class LongShiftFeaturesHost(ShiftFeaturesBaseHost):
 
     def conditional_append_mask(self, lag):
-        if lag >= self.forecast_period:
+        if lag >= self.forecast_horizon:
             self.mask.append(lag)
 
     def calculate_weight(self, data, shifted_data, lag):
         return abs(np.corrcoef(data.values, shifted_data.values)[0, 1]) ** self.corrcoef_power / self.std
 
     def generate_initial_lags(self) -> list:
-        return list(range(self.forecast_period, self.review_period + 1))
+        return list(range(self.forecast_horizon, self.review_period + 1))
 
     def generate_masked_lags(self) -> list:
         lags = []
         for i in self.mask:
-            if i >= self.forecast_period:
+            if i >= self.forecast_horizon:
                 lags.append(i)
         return lags
 
@@ -112,20 +112,20 @@ class ShortShiftFeaturesHost(ShiftFeaturesBaseHost):
     lag_weight_power = 0.5
 
     def conditional_append_mask(self, lag):
-        if lag < self.forecast_period:
+        if lag < self.forecast_horizon:
             self.mask.append(lag)
 
     def calculate_weight(self, data, shifted_data, lag):
-        return abs(np.corrcoef(data.values, shifted_data.values)[0, 1])**self.corrcoef_power \
-               * (lag / self.forecast_period)**self.lag_weight_power / self.std
+        return abs(np.corrcoef(data.values, shifted_data.values)[0, 1]) ** self.corrcoef_power \
+               * (lag / self.forecast_horizon) ** self.lag_weight_power / self.std
 
     def generate_initial_lags(self) -> list:
-        return list(range(1, self.forecast_period))
+        return list(range(1, self.forecast_horizon))
 
     def generate_masked_lags(self) -> list:
         lags = []
         for i in self.mask:
-            if i < self.forecast_period:
+            if i < self.forecast_horizon:
                 lags.append(i)
         return lags
 
@@ -134,14 +134,14 @@ class MovingAverageFeaturesHost(object):
 
     def __init__(self,
                  review_period: int,
-                 forecast_period: int,
+                 forecast_horizon: int,
                  name: str = '',
                  ema_number=32,
                  short_ema_divisor=6,
                  ema_step_multiplier=8):
 
         self.review_period = review_period
-        self.forecast_period = forecast_period
+        self.forecast_horizon = forecast_horizon
         self.name = name
         self.ema_number = ema_number
         self.short_ema_divisor = short_ema_divisor
@@ -259,10 +259,10 @@ class MovingAverageFeaturesHost(object):
     def __full_ema_windows(self):
 
         ema_step = (self.review_period /
-                    self.forecast_period *
+                    self.forecast_horizon *
                     self.ema_step_multiplier) ** (1 / (self.ema_number - 1))
 
-        ema_windows = np.array([self.forecast_period / self.short_ema_divisor * ema_step ** i
+        ema_windows = np.array([self.forecast_horizon / self.short_ema_divisor * ema_step ** i
                                 for i in range(self.ema_number)])
 
         return ema_windows

@@ -4,10 +4,10 @@ import numpy as np
 
 class ShBaseModel(object):
 
-    def __init__(self, review_period, forecast_period=1, random_state=0):
+    def __init__(self, review_period, forecast_horizon=1, random_state=0):
         self.X = None
         self.review_period = review_period
-        self.forecast_period = forecast_period
+        self.forecast_horizon = forecast_horizon
         self.random_state = random_state
         return
 
@@ -33,6 +33,15 @@ class ShBaseModel(object):
             np.array, shape (n_samples, )
         """
         raise NotImplementedError("Pure virtual class.")
+
+    def generate_empty_predict_frame(self, forecast_period):
+        step_time = self.step_time
+        time = self.X.index[-1]
+        index = []
+        for i in range(forecast_period):
+            time += step_time
+            index.append(time)
+        return pd.DataFrame(index=index)
 
     @property
     def step_time(self):
