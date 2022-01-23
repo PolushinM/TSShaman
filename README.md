@@ -1,2 +1,3 @@
-# TSShaman
-AutoMl library for time series forecasting
+In developing.
+
+Development of library just started, please understand and forgive me

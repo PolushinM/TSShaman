@@ -1,3 +1,4 @@
+from abc import ABCMeta, abstractmethod
 import pandas as pd
 import numpy as np
 import re
@@ -5,7 +6,7 @@ from typing import Union
 from math import pi
 
 
-class ShiftFeaturesBaseHost(object):
+class ShiftFeaturesBaseHost(metaclass=ABCMeta):
 
     def __init__(self,
                  review_period: int,
@@ -70,18 +71,22 @@ class ShiftFeaturesBaseHost(object):
             lags = self.generate_masked_lags()
         return lags
 
+    @abstractmethod
     def conditional_append_mask(self, lag):
         """Pure virtual function, appends mask by lag if it satisfies the condition"""
         raise NotImplementedError()
 
+    @abstractmethod
     def calculate_weight(self, data, shifted_data, lag):
         """Pure virtual function"""
         raise NotImplementedError()
 
+    @abstractmethod
     def generate_initial_lags(self) -> list:
         """Pure virtual function"""
         raise NotImplementedError()
 
+    @abstractmethod
     def generate_masked_lags(self) -> list:
         """Pure virtual function"""
         raise NotImplementedError()

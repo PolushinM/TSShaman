@@ -1,7 +1,5 @@
-import numpy as np
 import pandas as pd
 from sklearn.model_selection import GridSearchCV, cross_val_score
-from sklearn.linear_model import SGDRegressor
 
 
 def get_best_l1_alpha(X, y, estimator, cv=16, random_state=0, n_jobs=None):

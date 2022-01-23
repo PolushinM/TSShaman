@@ -1,16 +1,20 @@
+from abc import ABC, abstractmethod
+from typing import Union
 import pandas as pd
 import numpy as np
 
 
-class ShBaseModel(object):
+class ShBaseModel(ABC):
 
     def __init__(self, review_period, forecast_horizon=1, random_state=0):
-        self.X = None
+        self.X: Union[pd.DataFrame, None] = None
+        self.y: pd.Series() = None
         self.review_period = review_period
         self.forecast_horizon = forecast_horizon
         self.random_state = random_state
         return
 
+    @abstractmethod
     def fit(self, X: pd.DataFrame, y: pd.Series, additive_features: list = None, verbose=False, elaboration_level=1):
         """
         :param X: (pd.DataFrame, shape (n_samples, n_features)): the input data
@@ -24,6 +28,7 @@ class ShBaseModel(object):
         """
         raise NotImplementedError("Pure virtual class.")
 
+    @abstractmethod
     def predict(self, X=None, forecast_period=1, verbose=False):
         """
         :param X: (pd.DataFrame, shape (n_samples, n_features)) the input data (if exist)

@@ -1,3 +1,5 @@
+from abc import ABC, abstractmethod
+from _logger import *
 import pandas as pd
 import numpy as np
 from base_model import ShBaseModel
@@ -20,6 +22,7 @@ class ShLinearModel(ShBaseModel):
 
         self.long_linear_model = self.LongLinearModel(review_period, forecast_horizon, random_state)
         self.short_linear_model = self.ShortLinearModel(review_period, forecast_horizon, random_state)
+        self.stack_model = Ridge(fit_intercept=False, alpha=100)
 
         return
 
@@ -50,12 +53,16 @@ class ShLinearModel(ShBaseModel):
                                     alpha_multiplier=alpha_multiplier,
                                     feature_selection_strength=feature_selection_strength)
 
-        self.stack_model = Ridge(fit_intercept=False, alpha=100)
+        long_linear_model_score = cross_val_score(self.long_linear_model.linear_model,
+                                                  self.long_linear_model.X[self.review_period:],
+                                                  y[self.review_period:], cv=3).mean()
 
-        print('Short R^2=', cross_val_score(self.short_linear_model.linear_model,
-                                            self.long_linear_model.X[self.review_period:],
-                                            y[self.review_period:],
-                                            cv=2).mean())  # TODO: Delete
+        short_linear_model_score = cross_val_score(self.short_linear_model.linear_model,
+                                                   self.long_linear_model.X[self.review_period:],
+                                                   y[self.review_period:], cv=3).mean()
+
+        logger.debug(f'Long R^2={long_linear_model_score:.5f}, alpha={self.long_linear_model.alpha:.4f}')
+        logger.debug(f'Short R^2={short_linear_model_score:.5f}, alpha={self.short_linear_model.alpha:.4f}')
 
         stack = np.vstack((self.long_linear_model.linear_model.predict(self.long_linear_model.X[self.review_period:]),
                            self.short_linear_model.linear_model.predict(
@@ -63,7 +70,7 @@ class ShLinearModel(ShBaseModel):
 
         self.stack_model.fit(stack, y[self.review_period:])
 
-        print(self.stack_model.coef_)
+        logger.debug(f'Stack model coefficients {self.stack_model.coef_}')
 
         return self
 
@@ -79,21 +86,25 @@ class ShLinearModel(ShBaseModel):
 
     @property
     def score(self):
-        return cross_val_score(self.long_linear_model.linear_model,
-                               self.long_linear_model.X[self.review_period:],
-                               self.long_linear_model.y[self.review_period:],
-                               cv=3).mean()
+        pass
 
-    class LongLinearModel(ShBaseModel):
+    class LinearBaseModel(ShBaseModel, ABC):
         def __init__(self, review_period, forecast_horizon=1, random_state=0):
             super().__init__(review_period, forecast_horizon, random_state)
-            self.linear_features = []
-            self.y = pd.Series()
-            self.X = pd.DataFrame()
-            self.alpha = 0.001
-            self.X_pred = pd.DataFrame()
-            self.linear_model = SGDRegressor(penalty='l2', eta0=0.005, power_t=0.25, max_iter=50000,
+
+            self.estimator = SGDRegressor(eta0=0.005, power_t=0.25, max_iter=50000, random_state=random_state)
+
+            self.alpha = 0.0
+            self.linear_model = SGDRegressor(penalty='l2', alpha=self.alpha,
+                                             eta0=0.003, power_t=0.23, max_iter=100000,
                                              random_state=random_state)
+            return
+
+    class LongLinearModel(LinearBaseModel):
+        def __init__(self, review_period, forecast_horizon=1, random_state=0):
+            super().__init__(review_period, forecast_horizon, random_state)
+
+            self.linear_features = []
 
             self.shift_features_host = LongShiftFeaturesHost(name='y',
                                                              review_period=review_period,
@@ -122,13 +133,15 @@ class ShLinearModel(ShBaseModel):
                 .join(self.shift_features_host.generate(y)) \
                 .join(self.ma_features_host.generate(y))
 
+            logger.debug(f'Long Linear Model L1 feature selection:')
             short_features_to_drop, _ = l1_feature_select(self.X[self.review_period:], y[self.review_period:],
-                                                          estimator=self.linear_model,
+                                                          estimator=self.estimator,
                                                           strength=feature_selection_strength,
                                                           cv=cv,
                                                           random_state=self.random_state)
 
             self.X.drop(short_features_to_drop, axis=1, inplace=True)
+            logger.debug(f'Number of remaining features={self.X.shape[1]}')
 
             self.timedata_features_host.assign_mask(self.X.columns)
             self.shift_features_host.assign_mask(self.X.columns)
@@ -143,16 +156,11 @@ class ShLinearModel(ShBaseModel):
 
             best_alpha, _ = get_best_l2_alpha(self.X[self.review_period:],
                                               y[self.review_period:],
-                                              estimator=self.linear_model,
+                                              estimator=self.estimator,
                                               cv=cv)
+            self.alpha = best_alpha * alpha_multiplier ** (4 / self.X.shape[1])
 
-            self.alpha = best_alpha * alpha_multiplier ** (3 / self.X.shape[1])
-            self.linear_model = SGDRegressor(penalty='l2',
-                                             eta0=0.002,
-                                             power_t=0.2,
-                                             max_iter=50000,
-                                             alpha=self.alpha)
-
+            self.linear_model.set_params(alpha=self.alpha)
             self.linear_model.fit(self.X[self.review_period:].values, y[self.review_period:])
 
             return self
@@ -173,15 +181,11 @@ class ShLinearModel(ShBaseModel):
             indicators_row = self.ma_features_host.get_one_row(y=y[-1])
             return self.linear_model.predict(np.hstack((X_pred_row, shift_row, indicators_row)).reshape(1, -1))
 
-    class ShortLinearModel(ShBaseModel):
+    class ShortLinearModel(LinearBaseModel):
         def __init__(self, review_period, forecast_horizon=1, random_state=0):
             super().__init__(review_period, forecast_horizon, random_state)
-            self.y = pd.Series()
-            self.X = pd.DataFrame()
+
             self.alpha = 0.001
-            self.X_pred = pd.DataFrame()
-            self.linear_model = SGDRegressor(penalty='l2', eta0=0.005, power_t=0.25, max_iter=50000,
-                                             random_state=random_state)
 
             self.shift_features_host = ShortShiftFeaturesHost(name='y',
                                                               review_period=review_period,
@@ -201,13 +205,15 @@ class ShLinearModel(ShBaseModel):
             self.X = pd.DataFrame(index=X.index) \
                 .join(self.shift_features_host.generate(y))
 
+            logger.debug(f'Short Linear Model L1 feature selection:')
             short_features_to_drop, _ = l1_feature_select(self.X[self.review_period:], y[self.review_period:],
-                                                          estimator=self.linear_model,
+                                                          estimator=self.estimator,
                                                           strength=feature_selection_strength,
                                                           cv=cv,
                                                           random_state=self.random_state)
 
             self.X.drop(short_features_to_drop, axis=1, inplace=True)
+            logger.debug(f'Number of remaining features={self.X.shape[1]}')
 
             self.shift_features_host.assign_mask(self.X.columns)
 
@@ -217,16 +223,11 @@ class ShLinearModel(ShBaseModel):
 
             best_alpha, _ = get_best_l2_alpha(self.X[self.review_period:],
                                               y[self.review_period:],
-                                              estimator=self.linear_model,
+                                              estimator=self.estimator,
                                               cv=cv)
+            self.alpha = best_alpha * alpha_multiplier ** (10 / self.X.shape[1])
 
-            self.alpha = best_alpha * alpha_multiplier ** (16 / self.X.shape[1])
-            self.linear_model = SGDRegressor(penalty='l2',
-                                             eta0=0.002,
-                                             power_t=0.2,
-                                             max_iter=50000,
-                                             alpha=self.alpha)
-
+            self.linear_model.set_params(alpha=self.alpha)
             self.linear_model.fit(self.X[self.review_period:].values, y[self.review_period:])
 
             return self
