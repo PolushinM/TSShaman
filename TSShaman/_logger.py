@@ -3,17 +3,12 @@ from typing import Union
 
 
 class CustomFormatter(logging.Formatter):
+
     grey = "\x1b[0;37m"
     white = "\x1b[0;20m"
     yellow = "\x1b[33;20m"
     red = "\x1b[31;20m"
     bold_red = "\x1b[31;1m"
-
-    green = "\x1b[1;32m"
-    bold_yellow = "\x1b[1;33m"
-    purple = "\x1b[1;35m"
-    blue = "\x1b[1;34m"
-    light_blue = "\x1b[1;36m"
 
     reset = "\x1b[0m"
 
@@ -35,15 +30,15 @@ class CustomFormatter(logging.Formatter):
         return formatter.format(record)
 
 
+# Initialise logger
 logger = logging.getLogger("TSShaman")
-ch = logging.StreamHandler()
-ch.setLevel(logging.NOTSET)
-ch.setFormatter(CustomFormatter())
-logger.addHandler(ch)
+handler = logging.StreamHandler()
+handler.setLevel(logging.NOTSET)
+handler.setFormatter(CustomFormatter())
+logger.addHandler(handler)
 
 
 def set_verbosity(verbosity: Union[str, int, bool] = 'info'):
-
     levels = {'CRITICAL': 50, 'FATAL': 50, 'Fatal': 50, 'fatal': 50, 1: 50,
               'ERROR': 40, 'Error': 40, 'error': 40, 2: 40, False: 40,
               'WARNING': 30, 'WARN': 30, 'Warning': 30, 'warning': 30, 3: 30,
@@ -52,4 +47,3 @@ def set_verbosity(verbosity: Union[str, int, bool] = 'info'):
               'NOTSET': 0, 0: 0}
 
     logger.setLevel(levels[verbosity])
-
