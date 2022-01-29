@@ -1,12 +1,12 @@
-from abc import ABC, abstractmethod
-from _logger import *
+from ._logger import *
+from .base_model import ShBaseModel
+from .feature_generation import TimedataFeaturesHost, LongShiftFeaturesHost, ShortShiftFeaturesHost, \
+    MovingAverageFeaturesHost
+from .feature_selection import l1_feature_select
+from .optimization import get_best_l2_alpha, get_best_l1_alpha
+from abc import ABC
 import pandas as pd
 import numpy as np
-from base_model import ShBaseModel
-from feature_generation import TimedataFeaturesHost, LongShiftFeaturesHost, ShortShiftFeaturesHost, \
-    MovingAverageFeaturesHost
-from feature_selection import l1_feature_select
-from optimization import get_best_l2_alpha
 from sklearn.model_selection import cross_val_score
 from sklearn.linear_model import SGDRegressor, Ridge
 
@@ -22,7 +22,7 @@ class ShLinearModel(ShBaseModel):
 
         self.long_linear_model = self.LongLinearModel(review_period, forecast_horizon, random_state)
         self.short_linear_model = self.ShortLinearModel(review_period, forecast_horizon, random_state)
-        self.stack_model = Ridge(fit_intercept=False, alpha=100)
+        self.stack_model = Ridge(fit_intercept=False, alpha=1000)
 
         return
 
@@ -70,12 +70,12 @@ class ShLinearModel(ShBaseModel):
 
         self.stack_model.fit(stack, y[self.review_period:])
 
-        logger.debug(f'Stack model coefficients {self.stack_model.coef_}')
+        logger.debug(f'Stack coefficients {self.stack_model.coef_}')
 
         return self
 
     def predict(self, X=pd.DataFrame(), forecast_period=1, verbose=False):
-        long_coef = 0.2
+        long_coef = 0.1
         X_pred = self.generate_empty_predict_frame(forecast_period)
         y_long = self.long_linear_model.predict(X, forecast_period=forecast_period, verbose=verbose)
         y_short = self.short_linear_model.predict(X, forecast_period=forecast_period, verbose=verbose)
@@ -95,9 +95,7 @@ class ShLinearModel(ShBaseModel):
             self.estimator = SGDRegressor(eta0=0.005, power_t=0.25, max_iter=50000, random_state=random_state)
 
             self.alpha = 0.0
-            self.linear_model = SGDRegressor(penalty='l2', alpha=self.alpha,
-                                             eta0=0.003, power_t=0.23, max_iter=100000,
-                                             random_state=random_state)
+
             return
 
     class LongLinearModel(LinearBaseModel):
@@ -113,6 +111,9 @@ class ShLinearModel(ShBaseModel):
             self.ma_features_host = MovingAverageFeaturesHost(name='y',
                                                               review_period=review_period,
                                                               forecast_horizon=forecast_horizon)
+
+
+
             return
 
         def fit(self, X: pd.DataFrame, y: pd.Series,
@@ -158,9 +159,13 @@ class ShLinearModel(ShBaseModel):
                                               y[self.review_period:],
                                               estimator=self.estimator,
                                               cv=cv)
-            self.alpha = best_alpha * alpha_multiplier ** (4 / self.X.shape[1])
+            self.alpha = best_alpha * alpha_multiplier ** (6 / self.X.shape[1])
+            logger.debug(f'Long alpha multiplier={(self.alpha / best_alpha):.3f}')
 
-            self.linear_model.set_params(alpha=self.alpha)
+            #self.linear_model.set_params(alpha=self.alpha)
+            self.linear_model = SGDRegressor(penalty='l2', alpha=self.alpha,
+                                             eta0=0.003, power_t=0.23, max_iter=100000,
+                                             random_state=self.random_state)
             self.linear_model.fit(self.X[self.review_period:].values, y[self.review_period:])
 
             return self
@@ -190,6 +195,7 @@ class ShLinearModel(ShBaseModel):
             self.shift_features_host = ShortShiftFeaturesHost(name='y',
                                                               review_period=review_period,
                                                               forecast_horizon=forecast_horizon)
+
             return
 
         def fit(self, X: pd.DataFrame, y: pd.Series,
@@ -225,9 +231,13 @@ class ShLinearModel(ShBaseModel):
                                               y[self.review_period:],
                                               estimator=self.estimator,
                                               cv=cv)
-            self.alpha = best_alpha * alpha_multiplier ** (10 / self.X.shape[1])
+            self.alpha = best_alpha * alpha_multiplier ** (8 / self.X.shape[1]) * 2
+            logger.debug(f'Short alpha multiplier={(self.alpha / best_alpha):.3f}')
 
-            self.linear_model.set_params(alpha=self.alpha)
+            #self.linear_model.set_params(alpha=self.alpha)
+            self.linear_model = SGDRegressor(penalty='l2', alpha=self.alpha,
+                                             eta0=0.003, power_t=0.23, max_iter=100000,
+                                             random_state=self.random_state)
             self.linear_model.fit(self.X[self.review_period:].values, y[self.review_period:])
 
             return self

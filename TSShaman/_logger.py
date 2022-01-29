@@ -3,18 +3,20 @@ from typing import Union
 
 
 class CustomFormatter(logging.Formatter):
+    grey = "\x1b[0;37m"
+    white = "\x1b[0;20m"
+    yellow = "\x1b[33;20m"
+    red = "\x1b[31;20m"
+    bold_red = "\x1b[31;1m"
+
     green = "\x1b[1;32m"
     bold_yellow = "\x1b[1;33m"
     purple = "\x1b[1;35m"
     blue = "\x1b[1;34m"
     light_blue = "\x1b[1;36m"
 
-    grey = "\x1b[0;37m"
-    white = "\x1b[0;20m"
-    yellow = "\x1b[33;20m"
-    red = "\x1b[31;20m"
-    bold_red = "\x1b[31;1m"
     reset = "\x1b[0m"
+
     format = "%(asctime)s %(message)s"
 
     FORMATS = {
@@ -50,3 +52,4 @@ def set_verbosity(verbosity: Union[str, int, bool] = 'info'):
               'NOTSET': 0, 0: 0}
 
     logger.setLevel(levels[verbosity])
+
