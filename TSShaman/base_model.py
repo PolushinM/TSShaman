@@ -12,6 +12,7 @@ class ShBaseModel(ABC):
         self.review_period = review_period
         self.forecast_horizon = forecast_horizon
         self.random_state = random_state
+        self.features_hosts = []
         return
 
     @abstractmethod
@@ -47,6 +48,21 @@ class ShBaseModel(ABC):
             time += step_time
             index.append(time)
         return pd.DataFrame(index=index)
+
+    def generate_and_join_synthetic_features(self, X: pd.DataFrame, y: pd.Series):
+        result = pd.DataFrame(index=X.index)
+        for host in self.features_hosts:
+            result = result.join(host.generate(X, y))
+        return result
+
+    def assign_feature_masks(self, columns: list):
+        for host in self.features_hosts:
+            host.assign_mask(columns)
+
+    def initialise_rows(self, X: pd.DataFrame):
+        for host in self.features_hosts:
+            host.initialise_rows(X)
+
 
     @property
     def step_time(self):

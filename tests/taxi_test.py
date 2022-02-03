@@ -22,7 +22,7 @@ class TaxiTest(unittest.TestCase):
         predicted_y = model.fit(self.X[:-300],
                                 self.y[:-300],
                                 cv=2,
-                                omega=0.1
+                                omega=0.15
                                 ).predict(forecast_segment=300)
 
         self.assertGreater(r2_score(self.y[-300:], predicted_y), 0.84)

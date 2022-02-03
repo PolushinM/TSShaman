@@ -1,5 +1,5 @@
 from .sh_linear_model import *
-from .sh_catboost_model import *
+# from .sh_catboost_model import * # TODO: Add CatBoost in imports
 from .cross_validation import *
 from ._logger import *
 from datetime import datetime
@@ -26,7 +26,7 @@ class TSShaman(object):
         start_fit_time = datetime.now()
 
         linear_alpha_multiplier = 1.0 + 100 * omega
-        linear_feature_selection_strength = 0.032 # / 0.15 * omega
+        linear_feature_selection_strength = 0.032 / 0.15 * omega
 
         self.sh_linear_model.fit(X, y,
                                  linear_features,

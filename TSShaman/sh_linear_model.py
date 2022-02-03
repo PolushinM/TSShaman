@@ -166,20 +166,6 @@ class ShLinearModel(ShBaseModel):
         def calculate_toughened_alpha(self, best_alpha: float, alpha_multiplier: float):
             pass
 
-        def generate_and_join_synthetic_features(self, X: pd.DataFrame, y: pd.Series):
-            result = pd.DataFrame(index=X.index)
-            for host in self.features_hosts:
-                result = result.join(host.generate(X, y))
-            return result
-
-        def assign_feature_masks(self, columns: list):
-            for host in self.features_hosts:
-                host.assign_mask(columns)
-
-        def initialise_rows(self, X: pd.DataFrame):
-            for host in self.features_hosts:
-                host.initialise_rows(X)
-
 
     class LongLinearModel(LinearBaseModel):
         def __init__(self, review_period, forecast_horizon=1, random_state=0):

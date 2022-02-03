@@ -2,7 +2,7 @@ from .optimization import get_best_l1_alpha
 from ._logger import *
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import GridSearchCV, cross_val_score
+from sklearn.model_selection import cross_val_score
 
 
 def l1_feature_select(X: pd.DataFrame, y, estimator, strength, cv, random_state, n_jobs=-1):
