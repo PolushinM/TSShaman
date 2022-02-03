@@ -23,12 +23,10 @@ class TSShaman(object):
             verbose=False,
             omega=0.001,
             qualification_level=1):
-
         start_fit_time = datetime.now()
 
-
-        linear_alpha_multiplier = 1.0 + 6000*omega
-        linear_feature_selection_strength = 0.1*omega
+        linear_alpha_multiplier = 1.0 + 100 * omega
+        linear_feature_selection_strength = 0.032 # / 0.15 * omega
 
         self.sh_linear_model.fit(X, y,
                                  linear_features,
@@ -41,9 +39,9 @@ class TSShaman(object):
 
         return self
 
-    def predict(self, X_linear_features=pd.DataFrame(), forecast_period=1, verbose=False):
+    def predict(self, X_linear_features=pd.DataFrame(), forecast_segment=1, verbose=False):
         start_predict_time = datetime.now()
-        y_pred = self.sh_linear_model.predict(X_linear_features, forecast_period, verbose)
+        y_pred = self.sh_linear_model.predict(X_linear_features, forecast_segment, verbose)
         logger.info(f'Predict time={(datetime.now() - start_predict_time).total_seconds():.1f}\n')
         return y_pred
 

@@ -2,8 +2,8 @@ from ._logger import *
 from .base_model import ShBaseModel
 from .feature_generation import TimedataFeaturesHost, LongShiftFeaturesHost, ShortShiftFeaturesHost, \
     MovingAverageFeaturesHost
-from .feature_selection import l1_feature_select
-from .optimization import get_best_l2_alpha, get_best_l1_alpha
+from .feature_selection import l1_feature_select, corcoeff_feature_selection
+from .optimization import get_best_l2_alpha
 from abc import ABC, abstractmethod
 import pandas as pd
 import numpy as np
@@ -74,15 +74,15 @@ class ShLinearModel(ShBaseModel):
 
         return self
 
-    def predict(self, X=pd.DataFrame(), forecast_period=1, verbose=False):
+    def predict(self, X=pd.DataFrame(), forecast_segment=1, verbose=False):
         long_coef = 0.1
-        X_pred = self.generate_empty_predict_frame(forecast_period)
-        y_long = self.long_linear_model.predict(X, forecast_period=forecast_period, verbose=verbose)
-        y_short = self.short_linear_model.predict(X, forecast_period=forecast_period, verbose=verbose)
+        X_pred = self.generate_empty_predict_frame(forecast_segment)
+        y_long = self.long_linear_model.predict(X, forecast_segment=forecast_segment, verbose=verbose)
+        y_short = self.short_linear_model.predict(X, forecast_segment=forecast_segment, verbose=verbose)
 
         y = (self.stack_model.coef_[0] + long_coef) * y_long + (self.stack_model.coef_[1] - long_coef) * y_short
 
-        return pd.DataFrame(y[-forecast_period:], index=X_pred.index)
+        return pd.DataFrame(y[-forecast_segment:], index=X_pred.index)
 
     @property
     def score(self):
@@ -97,6 +97,7 @@ class ShLinearModel(ShBaseModel):
                                              eta0=0.003, power_t=0.23, max_iter=100000,
                                              random_state=self.random_state)
             self.alpha = 0.0
+            self.corrcoef_select_quantile = 0.0
             self.features_hosts = []
 
             return
@@ -115,13 +116,18 @@ class ShLinearModel(ShBaseModel):
 
             self.X = self.generate_and_join_synthetic_features(X, y)
 
-            logger.debug(f'Long Linear Model L1 feature selection:')
+            logger.debug(f'Linear Model feature selection:')
+            features_to_drop = corcoeff_feature_selection(self.X[self.review_period:],
+                                                          y[self.review_period:],
+                                                          strength=self.corrcoef_select_quantile)
+            self.X.drop(features_to_drop, axis=1, inplace=True)
+            logger.debug(f'Number of corrcoef dropped features={len(features_to_drop)}')
+
             features_to_drop, _ = l1_feature_select(self.X[self.review_period:], y[self.review_period:],
                                                     estimator=self.estimator,
                                                     strength=feature_selection_strength,
                                                     cv=cv,
                                                     random_state=self.random_state)
-
             self.X.drop(features_to_drop, axis=1, inplace=True)
             logger.debug(f'Number of remaining features={self.X.shape[1]}')
             logger.debug('Remaining features: ' + str(self.X.columns))
@@ -136,19 +142,19 @@ class ShLinearModel(ShBaseModel):
                                               estimator=self.estimator,
                                               cv=cv)
             self.alpha = self.calculate_toughened_alpha(best_alpha, alpha_multiplier)
-            logger.debug(f'Long alpha multiplier={(self.alpha / best_alpha):.3f}')
+            logger.debug(f'Alpha multiplier={(self.alpha / best_alpha):.3f}')
 
             self.linear_model.set_params(alpha=self.alpha)
             self.linear_model.fit(self.X[self.review_period:].values, y[self.review_period:])
 
             return self
 
-        def predict(self, X=pd.DataFrame(), forecast_period=1, verbose=False):
+        def predict(self, X=pd.DataFrame(), forecast_segment=1, verbose=False):
             y = self.y.values
-            self.initialise_rows(self.generate_empty_predict_frame(forecast_period))
-            for i in range(forecast_period):
+            self.initialise_rows(self.generate_empty_predict_frame(forecast_segment))
+            for i in range(forecast_segment):
                 y = np.append(y, self.predict_one_step(y))
-            return y[-forecast_period:]
+            return y[-forecast_segment:]
 
         def predict_one_step(self, y: np.array):
             row = np.empty((0,), dtype=float)
@@ -159,7 +165,6 @@ class ShLinearModel(ShBaseModel):
         @abstractmethod
         def calculate_toughened_alpha(self, best_alpha: float, alpha_multiplier: float):
             pass
-
 
         def generate_and_join_synthetic_features(self, X: pd.DataFrame, y: pd.Series):
             result = pd.DataFrame(index=X.index)
@@ -191,10 +196,11 @@ class ShLinearModel(ShBaseModel):
                                           review_period=review_period,
                                           forecast_horizon=forecast_horizon)
             ]
+            self.corrcoef_select_quantile = 0.25
             return
 
         def calculate_toughened_alpha(self, best_alpha: float, alpha_multiplier: float):
-            return best_alpha * alpha_multiplier ** (6 / self.X.shape[1])
+            return best_alpha * alpha_multiplier
 
 
     class ShortLinearModel(LinearBaseModel):
@@ -204,8 +210,8 @@ class ShLinearModel(ShBaseModel):
             self.features_hosts = [ShortShiftFeaturesHost(name='y',
                                                           review_period=review_period,
                                                           forecast_horizon=forecast_horizon), ]
-
+            self.corrcoef_select_quantile = 0.5
             return
 
         def calculate_toughened_alpha(self, best_alpha: float, alpha_multiplier: float):
-            return best_alpha * alpha_multiplier ** (8 / self.X.shape[1]) * 2
+            return best_alpha * alpha_multiplier * 30

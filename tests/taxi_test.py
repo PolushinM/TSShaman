@@ -18,12 +18,12 @@ class TaxiTest(unittest.TestCase):
         return
 
     def test_r2_performance(self):
-        model = sh.TSShaman(review_period=340, forecast_horizon=270, verbosity='debug')
+        model = sh.TSShaman(review_period=340, forecast_horizon=230, verbosity='debug')
         predicted_y = model.fit(self.X[:-300],
                                 self.y[:-300],
                                 cv=2,
-                                omega=0.02
-                                ).predict(forecast_period=300)
+                                omega=0.1
+                                ).predict(forecast_segment=300)
 
         self.assertGreater(r2_score(self.y[-300:], predicted_y), 0.84)
 
@@ -31,8 +31,8 @@ class TaxiTest(unittest.TestCase):
         predicted_y = model.fit(self.X[:-300],
                                 self.y[:-300],
                                 cv=2,
-                                omega=0.08
-                                ).predict(forecast_period=300)
+                                omega=0.15
+                                ).predict(forecast_segment=300)
 
         self.assertGreater(r2_score(self.y[-300:], predicted_y), 0.87)
 
