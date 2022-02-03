@@ -1,12 +1,10 @@
 import unittest
-import importlib.util
 import pandas as pd
 from sklearn.metrics import r2_score
 import warnings
 import sys
 from pathlib import Path
 
-# import TSShaman as sh
 sys.path.append(str(Path(__file__).parent.parent))
 import TSShaman as sh
 
@@ -20,14 +18,24 @@ class TaxiTest(unittest.TestCase):
         return
 
     def test_r2_performance(self):
-        model = sh.TSShaman(review_period=505, forecast_horizon=250, verbosity='error')
+        model = sh.TSShaman(review_period=340, forecast_horizon=270, verbosity='debug')
         predicted_y = model.fit(self.X[:-300],
                                 self.y[:-300],
                                 cv=2,
-                                omega=0.13
+                                omega=0.02
                                 ).predict(forecast_period=300)
 
-        self.assertTrue(r2_score(self.y[-300:], predicted_y) > 0.86)
+        self.assertGreater(r2_score(self.y[-300:], predicted_y), 0.84)
+
+        model = sh.TSShaman(review_period=505, forecast_horizon=250, verbosity='debug')
+        predicted_y = model.fit(self.X[:-300],
+                                self.y[:-300],
+                                cv=2,
+                                omega=0.08
+                                ).predict(forecast_period=300)
+
+        self.assertGreater(r2_score(self.y[-300:], predicted_y), 0.87)
+
 
 
 if __name__ == '__main__':

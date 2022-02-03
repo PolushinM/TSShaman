@@ -45,5 +45,5 @@ def set_verbosity(verbosity: Union[str, int, bool] = 'info'):
               'INFO': 20, 'Info': 20, 'info': 20, 4: 20, True: 20,
               'DEBUG': 10, 'Debug': 10, 'debug': 10, 5: 10,
               'NOTSET': 0, 0: 0}
-
     logger.setLevel(levels[verbosity])
+

@@ -32,17 +32,21 @@ class ShiftFeaturesBaseHost(metaclass=ABCMeta):
                 self.conditional_append_mask(lag)
         return
 
-    def generate(self, data: pd.Series) -> pd.DataFrame:
+    def generate(self, X: pd.DataFrame, y: pd.Series) -> pd.DataFrame:
 
-        self.mean = data.mean()
-        self.std = data.std()
+        self.mean = y.mean()
+        self.std = y.std()
 
         lags = self.lag_list
         if len(lags) == 0:
+            self.weights = pd.Series()
             return pd.DataFrame()
-        features, self.weights = self.calculate_features_and_weights(data, lags)
+        features, self.weights = self.calculate_features_and_weights(y, lags)
 
         return features * self.weights
+
+    def initialise_rows(self, X: pd.DataFrame):
+        pass
 
     def calculate_features_and_weights(self, data, lags):
         features = pd.DataFrame()
@@ -53,12 +57,12 @@ class ShiftFeaturesBaseHost(metaclass=ABCMeta):
             features[self.name + '_shift' + str(lag)] = shifted_data - self.mean
         return features, weights.iloc[0]
 
-    def get_one_row(self, data: np.array) -> np.array:
+    def get_one_row(self, y: np.array) -> np.array:
         # This is a key function that must be performed very fast
         i: int = 0
         features_row = np.ndarray((len(self.mask),), dtype=float)
         for lag in self.mask:
-            features_row[i] = data[-lag] - self.mean
+            features_row[i] = y[-lag] - self.mean
             i += 1
         return features_row * self.weights.values
 
@@ -164,7 +168,7 @@ class MovingAverageFeaturesHost(object):
         self.__bin_mask = None
         return
 
-    def assign_masks(self, columns) -> None:
+    def assign_mask(self, columns) -> None:
         self.is_mask_used = True
         self.masks = self.__parse_masks(columns)
         self.ema_windows = self.__masked_ema_windows
@@ -172,17 +176,17 @@ class MovingAverageFeaturesHost(object):
         self.__bin_mask = self.__get_bin_mask()
         return
 
-    def generate(self, data: pd.Series):
-        self.mean = data.mean()
+    def generate(self, X: pd.DataFrame, y: pd.Series):
+        self.mean = y.mean()
 
         # Memory allocation for resulting values
-        result_ema = np.ndarray((data.shape[0], len(self.alphas)), dtype=float)
-        result_dma = np.ndarray((data.shape[0], len(self.alphas)), dtype=float)
-        result_tma = np.ndarray((data.shape[0], len(self.alphas)), dtype=float)
-        result_qma = np.ndarray((data.shape[0], len(self.alphas)), dtype=float)
+        result_ema = np.ndarray((y.shape[0], len(self.alphas)), dtype=float)
+        result_dma = np.ndarray((y.shape[0], len(self.alphas)), dtype=float)
+        result_tma = np.ndarray((y.shape[0], len(self.alphas)), dtype=float)
+        result_qma = np.ndarray((y.shape[0], len(self.alphas)), dtype=float)
 
         # Fill buffer vectors
-        self.ema_buffer = np.ones((len(self.alphas),), dtype=float) * (data.iloc[0] - self.mean)
+        self.ema_buffer = np.ones((len(self.alphas),), dtype=float) * (y.iloc[0] - self.mean)
         self.dma_buffer = self.ema_buffer
         self.tma_buffer = self.ema_buffer
         self.qma_buffer = self.ema_buffer
@@ -192,8 +196,8 @@ class MovingAverageFeaturesHost(object):
         result_qma[0] = self.ema_buffer
 
         # Calculation of EMA, DMA, TMA, QMA
-        for i in range(1, data.shape[0]):
-            self.ema_buffer = self.ema_buffer * (1 - self.alphas) + self.alphas * (data[i] - self.mean)
+        for i in range(1, y.shape[0]):
+            self.ema_buffer = self.ema_buffer * (1 - self.alphas) + self.alphas * (y[i] - self.mean)
             self.dma_buffer = self.dma_buffer * (1 - self.alphas) + self.alphas * self.ema_buffer
             self.tma_buffer = self.tma_buffer * (1 - self.alphas) + self.alphas * self.dma_buffer
             self.qma_buffer = self.qma_buffer * (1 - self.alphas) + self.alphas * self.tma_buffer
@@ -204,7 +208,7 @@ class MovingAverageFeaturesHost(object):
 
         # Convert result into pandas DaraFrame
         features = pd.DataFrame(np.hstack((result_ema, result_dma, result_tma, result_qma)),
-                                index=data.index,
+                                index=y.index,
                                 columns=self.non_filtered_columns)
 
         # Drop redundant columns
@@ -215,13 +219,16 @@ class MovingAverageFeaturesHost(object):
             self.weights = pd.Series()
             return pd.DataFrame()
         else:
-            self.weights = get_corr_weights(features, data)
+            self.weights = get_corr_weights(features, y)
             return features * self.weights
 
-    def get_one_row(self, y: float) -> np.array:
+    def initialise_rows(self, X: pd.DataFrame):
+        pass
+
+    def get_one_row(self, y: np.array) -> np.array:
         # Calculation of single rows of features
         # This is a key function that must be performed very fast
-        self.ema_buffer = self.ema_buffer * (1 - self.alphas) + self.alphas * (y - self.mean)
+        self.ema_buffer = self.ema_buffer * (1 - self.alphas) + self.alphas * (y[-1] - self.mean)
         self.dma_buffer = self.dma_buffer * (1 - self.alphas) + self.alphas * self.ema_buffer
         self.tma_buffer = self.tma_buffer * (1 - self.alphas) + self.alphas * self.dma_buffer
         self.qma_buffer = self.qma_buffer * (1 - self.alphas) + self.alphas * self.tma_buffer
@@ -307,6 +314,9 @@ class TimedataFeaturesHost(object):
     def __init__(self):
         self.weights = None
         self.mask = None
+        self.features_buffer = pd.DataFrame()
+        self.__row_index = -1
+        self.__calculate_weights = True
         return
 
     def assign_mask(self, columns) -> None:
@@ -320,15 +330,15 @@ class TimedataFeaturesHost(object):
                 self.mask.add(col)
         return
 
-    def generate(self, data: pd.DataFrame, y: Union[pd.Series, None] = None, calculate_weights=True) -> pd.DataFrame:
+    def generate(self, X: pd.DataFrame, y: Union[pd.Series, None] = None) -> pd.DataFrame:
 
-        if pd.api.types.is_datetime64_ns_dtype(data.index):
-            features = pd.DataFrame(index=data.index)
-            hour_features = self.generate_hour_features(data.index.to_series(), name='index')
-            day_features = self.generate_day_features(data.index.to_series(), name='index')
-            week_features = self.generate_week_features(data.index.to_series(), name='index')
-            weekend_feature = self.generate_weekend_feature(data.index.to_series(), name='index')
-            year_features = self.generate_year_features(data.index.to_series(), name='index')
+        if pd.api.types.is_datetime64_ns_dtype(X.index):
+            features = pd.DataFrame(index=X.index)
+            hour_features = self.generate_hour_features(X.index.to_series(), name='index')
+            day_features = self.generate_day_features(X.index.to_series(), name='index')
+            week_features = self.generate_week_features(X.index.to_series(), name='index')
+            weekend_feature = self.generate_weekend_feature(X.index.to_series(), name='index')
+            year_features = self.generate_year_features(X.index.to_series(), name='index')
             if not hour_features.empty:
                 features = features.join(hour_features)
             if not day_features.empty:
@@ -341,11 +351,23 @@ class TimedataFeaturesHost(object):
                 features = features.join(year_features)
             if features.empty:
                 return pd.DataFrame()
-            if calculate_weights:
+            if self.__calculate_weights:
                 self.weights = get_corr_weights(features, y)
             return features * self.weights
         else:
             return pd.DataFrame()
+
+    def initialise_rows(self, X: pd.DataFrame):
+        self.__row_index = -1
+        self.__calculate_weights = False
+        self.features_buffer = self.generate(X, y=None).values
+        self.__calculate_weights = True
+
+    def get_one_row(self, y: np.array) -> np.array:
+        self.__row_index += 1
+        if len(self.features_buffer) == 0:
+            return np.empty((0,), dtype=float)
+        return self.features_buffer[self.__row_index]
 
     def generate_hour_features(self, series: pd.Series, name='') -> pd.DataFrame:
 

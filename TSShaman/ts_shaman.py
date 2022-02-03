@@ -28,7 +28,7 @@ class TSShaman(object):
 
 
         linear_alpha_multiplier = 1.0 + 6000*omega
-        linear_feature_selection_strength = 0.15*omega
+        linear_feature_selection_strength = 0.1*omega
 
         self.sh_linear_model.fit(X, y,
                                  linear_features,
