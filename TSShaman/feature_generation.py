@@ -118,7 +118,7 @@ class LongShiftFeaturesHost(ShiftFeaturesBaseHost):
 
 class ShortShiftFeaturesHost(ShiftFeaturesBaseHost):
 
-    lag_weight_power = 1.0
+    lag_weight_power = 0.45
 
     def conditional_append_mask(self, lag):
         if lag < self.forecast_horizon:

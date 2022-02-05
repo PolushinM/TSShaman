@@ -23,6 +23,7 @@ class ShLinearModel(ShBaseModel):
         self.long_linear_model = self.LongLinearModel(review_period, forecast_horizon, random_state)
         self.short_linear_model = self.ShortLinearModel(review_period, forecast_horizon, random_state)
         self.stack_model = Ridge(fit_intercept=False, alpha=1000)
+        self.stacking_long_bias_coef = 0.1
 
         return
 
@@ -53,34 +54,45 @@ class ShLinearModel(ShBaseModel):
                                     alpha_multiplier=alpha_multiplier,
                                     feature_selection_strength=feature_selection_strength)
 
-        long_linear_model_score = cross_val_score(self.long_linear_model.linear_model,
+        long_linear_model_score = cross_val_score(self.long_linear_model.model,
                                                   self.long_linear_model.X[self.review_period:],
                                                   y[self.review_period:], cv=3).mean()
 
-        short_linear_model_score = cross_val_score(self.short_linear_model.linear_model,
+        short_linear_model_score = cross_val_score(self.short_linear_model.model,
                                                    self.long_linear_model.X[self.review_period:],
                                                    y[self.review_period:], cv=3).mean()
 
         logger.debug(f'Long R^2={long_linear_model_score:.5f}, alpha={self.long_linear_model.alpha:.4f}')
         logger.debug(f'Short R^2={short_linear_model_score:.5f}, alpha={self.short_linear_model.alpha:.4f}')
 
-        stack = np.vstack((self.long_linear_model.linear_model.predict(self.long_linear_model.X[self.review_period:]),
-                           self.short_linear_model.linear_model.predict(
+        stack = np.vstack((self.long_linear_model.model.predict(
+            self.long_linear_model.X[self.review_period:]),
+                           self.short_linear_model.model.predict(
                                self.short_linear_model.X[self.review_period:]))).T
 
         self.stack_model.fit(stack, y[self.review_period:])
-
         logger.debug(f'Stack coefficients {self.stack_model.coef_}')
 
         return self
 
+    @property
+    def residuals(self):
+
+        y_pred = (self.stack_model.coef_[0] + self.stacking_long_bias_coef) * \
+                 self.long_linear_model.model.predict(self.long_linear_model.X) + \
+                 (self.stack_model.coef_[1] - self.stacking_long_bias_coef) * \
+                 self.short_linear_model.model.predict(self.short_linear_model.X)
+
+        return pd.Series(self.y.values - y_pred, index=self.X.index)
+
     def predict(self, X=pd.DataFrame(), forecast_segment=1, verbose=False):
-        long_coef = 0.1
+
         X_pred = self.generate_empty_predict_frame(forecast_segment)
         y_long = self.long_linear_model.predict(X, forecast_segment=forecast_segment, verbose=verbose)
         y_short = self.short_linear_model.predict(X, forecast_segment=forecast_segment, verbose=verbose)
 
-        y = (self.stack_model.coef_[0] + long_coef) * y_long + (self.stack_model.coef_[1] - long_coef) * y_short
+        y = (self.stack_model.coef_[0] + self.stacking_long_bias_coef) * y_long + \
+            (self.stack_model.coef_[1] - self.stacking_long_bias_coef) * y_short
 
         return pd.DataFrame(y[-forecast_segment:], index=X_pred.index)
 
@@ -93,9 +105,9 @@ class ShLinearModel(ShBaseModel):
             super().__init__(review_period, forecast_horizon, random_state)
 
             self.estimator = SGDRegressor(eta0=0.005, power_t=0.25, max_iter=50000, random_state=random_state)
-            self.linear_model = SGDRegressor(penalty='l2',
-                                             eta0=0.003, power_t=0.23, max_iter=100000,
-                                             random_state=self.random_state)
+            self.model = SGDRegressor(penalty='l2',
+                                      eta0=0.003, power_t=0.23, max_iter=100000,
+                                      random_state=self.random_state)
             self.alpha = 0.0
             self.corrcoef_select_quantile = 0.0
             self.features_hosts = []
@@ -116,10 +128,10 @@ class ShLinearModel(ShBaseModel):
 
             self.X = self.generate_and_join_synthetic_features(X, y)
 
-            logger.debug(f'Linear Model feature selection:')
+            logger.debug(f'Linear model feature selection:')
             features_to_drop = corcoeff_feature_selection(self.X[self.review_period:],
                                                           y[self.review_period:],
-                                                          strength=self.corrcoef_select_quantile)
+                                                          quantile=self.corrcoef_select_quantile)
             self.X.drop(features_to_drop, axis=1, inplace=True)
             logger.debug(f'Number of corrcoef dropped features={len(features_to_drop)}')
 
@@ -134,7 +146,7 @@ class ShLinearModel(ShBaseModel):
 
             self.assign_feature_masks(self.X.columns.tolist())
 
-            # Reset dataset, recreate and join synthetic features by masks with additional features
+            # Reset dataset, recreate and join synthetic features by masks
             self.X = self.generate_and_join_synthetic_features(X, y)
 
             best_alpha, _ = get_best_l2_alpha(self.X[self.review_period:],
@@ -144,28 +156,14 @@ class ShLinearModel(ShBaseModel):
             self.alpha = self.calculate_toughened_alpha(best_alpha, alpha_multiplier)
             logger.debug(f'Alpha multiplier={(self.alpha / best_alpha):.3f}')
 
-            self.linear_model.set_params(alpha=self.alpha)
-            self.linear_model.fit(self.X[self.review_period:].values, y[self.review_period:])
+            self.model.set_params(alpha=self.alpha)
+            self.model.fit(self.X[self.review_period:].values, y[self.review_period:])
 
             return self
-
-        def predict(self, X=pd.DataFrame(), forecast_segment=1, verbose=False):
-            y = self.y.values
-            self.initialise_rows(self.generate_empty_predict_frame(forecast_segment))
-            for i in range(forecast_segment):
-                y = np.append(y, self.predict_one_step(y))
-            return y[-forecast_segment:]
-
-        def predict_one_step(self, y: np.array):
-            row = np.empty((0,), dtype=float)
-            for host in self.features_hosts:
-                row = np.hstack((row, host.get_one_row(y=y)))
-            return self.linear_model.predict(row.reshape(1, -1))
 
         @abstractmethod
         def calculate_toughened_alpha(self, best_alpha: float, alpha_multiplier: float):
             pass
-
 
     class LongLinearModel(LinearBaseModel):
         def __init__(self, review_period, forecast_horizon=1, random_state=0):
@@ -188,7 +186,6 @@ class ShLinearModel(ShBaseModel):
         def calculate_toughened_alpha(self, best_alpha: float, alpha_multiplier: float):
             return best_alpha * alpha_multiplier
 
-
     class ShortLinearModel(LinearBaseModel):
         def __init__(self, review_period, forecast_horizon=1, random_state=0):
             super().__init__(review_period, forecast_horizon, random_state)
@@ -200,4 +197,4 @@ class ShLinearModel(ShBaseModel):
             return
 
         def calculate_toughened_alpha(self, best_alpha: float, alpha_multiplier: float):
-            return best_alpha * alpha_multiplier * 30
+            return best_alpha * alpha_multiplier * 500

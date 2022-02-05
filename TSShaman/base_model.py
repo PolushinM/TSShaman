@@ -13,6 +13,7 @@ class ShBaseModel(ABC):
         self.forecast_horizon = forecast_horizon
         self.random_state = random_state
         self.features_hosts = []
+        self.model = None
         return
 
     @abstractmethod
@@ -29,16 +30,22 @@ class ShBaseModel(ABC):
         """
         raise NotImplementedError("Pure virtual class.")
 
-    @abstractmethod
-    def predict(self, X=None, forecast_period=1, verbose=False):
-        """
-        :param X: (pd.DataFrame, shape (n_samples, n_features)) the input data (if exist)
-        :param forecast_period: = n_samples - number of samples (cycles), for which the forecast should be built
-        :param verbose: Enable verbose output.
-        Return:
-            np.array, shape (n_samples, )
-        """
-        raise NotImplementedError("Pure virtual class.")
+    def predict(self, X=pd.DataFrame(), forecast_segment=1, verbose=False):
+
+        X_pred = self.generate_empty_predict_frame(forecast_segment)
+
+        y = self.y.values
+        self.initialise_rows(self.generate_empty_predict_frame(forecast_segment))
+        for i in range(forecast_segment):
+            y = np.append(y, self.predict_one_step(y))
+
+        return pd.DataFrame(y[-forecast_segment:], index=X_pred.index)
+
+    def predict_one_step(self, y: np.array):
+        row = np.empty((0,), dtype=float)
+        for host in self.features_hosts:
+            row = np.hstack((row, host.get_one_row(y=y)))
+        return self.model.predict(row.reshape(1, -1))
 
     def generate_empty_predict_frame(self, forecast_period):
         step_time = self.step_time
@@ -62,7 +69,6 @@ class ShBaseModel(ABC):
     def initialise_rows(self, X: pd.DataFrame):
         for host in self.features_hosts:
             host.initialise_rows(X)
-
 
     @property
     def step_time(self):

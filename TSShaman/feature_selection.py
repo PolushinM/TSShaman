@@ -1,8 +1,11 @@
+from catboost import EFstrType
+
 from .optimization import get_best_l1_alpha
 from ._logger import *
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import cross_val_score
+from catboost import Pool
 
 
 def l1_feature_select(X: pd.DataFrame, y, estimator, strength, cv, random_state, n_jobs=-1):
@@ -36,7 +39,7 @@ def l1_feature_select(X: pd.DataFrame, y, estimator, strength, cv, random_state,
     return drop_features, best_alpha
 
 
-def corcoeff_feature_selection(X: pd.DataFrame, y: pd.Series, strength: float = 0.5):
+def corcoeff_feature_selection(X: pd.DataFrame, y: pd.Series, quantile: float = 0.5):
     corrcoefs = np.ndarray((X.shape[1],), dtype=float)
     i: int = 0
     dropped_features = []
@@ -44,13 +47,65 @@ def corcoeff_feature_selection(X: pd.DataFrame, y: pd.Series, strength: float = 
     for _, col in X.iteritems():
         corrcoefs[i] = abs(np.corrcoef(y.values, col.values)[0, 1])
         i += 1
-    threshold = np.quantile(corrcoefs, strength)
+    threshold = np.quantile(corrcoefs, quantile)
     logger.debug(f'Corrcoef threshold={threshold:.5f}')
 
     i = 0
     for col in X.columns:
-        if corrcoefs[i] < threshold:
+        if corrcoefs[i] <= threshold:
             dropped_features.append(col)
         i += 1
+
+    return dropped_features
+
+
+def coefficient_feature_select(X, y, estimator, quantile):
+    dropped_features = []
+
+    eval_set_begin_index = - round(y.shape[0] * 0.7)
+    estimator.fit(X[:eval_set_begin_index],
+                  y[:eval_set_begin_index],
+                  eval_set=(
+                      X[eval_set_begin_index:],
+                      y[eval_set_begin_index:])
+                  )
+
+    coefs_table = estimator.get_feature_importance(data=Pool(X),
+                                                   reference_data=None,
+                                                   type=EFstrType.FeatureImportance,
+                                                   prettified=False,
+                                                   thread_count=-1,
+                                                   verbose=False)
+
+    threshold = np.quantile(np.array(coefs_table), quantile)
+    logger.debug(f'Coefficient threshold={threshold:.5f}')
+
+    i = 0
+    for coef in coefs_table:
+        if coef <= threshold:
+            dropped_features.append(X.columns[i])
+        i += 1
+
+    return dropped_features
+
+
+def catboost_feature_select(X, y, estimator, quantile):
+
+    eval_set_begin_index = - round(y.shape[0] * 0.55)
+
+    dropped_features = estimator.select_features(X[:eval_set_begin_index],
+                                                 y[:eval_set_begin_index],
+                                                 eval_set=(
+                                                     X[eval_set_begin_index:],
+                                                     y[eval_set_begin_index:]),
+                                                 features_for_select=X.columns.tolist(),
+                                                 num_features_to_select=round(len(X.columns) * (1 - quantile)),
+                                                 algorithm=None,
+                                                 steps=3,
+                                                 shap_calc_type=None,
+                                                 train_final_model=False,
+                                                 verbose=None,
+                                                 logging_level=None,
+                                                 plot=False)['eliminated_features_names']
 
     return dropped_features

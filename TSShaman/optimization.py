@@ -11,7 +11,6 @@ def get_best_l2_alpha(X, y, estimator, cv=16, random_state=0, n_jobs=None):
 
 
 def get_best_lr_alpha(X, y, cv, estimator, random_state, penalty, n_jobs):
-
     estimator.set_params(random_state=random_state, penalty=penalty)
 
     alpha_table = exponential_alpha_greed_search(X, y, estimator,
@@ -22,7 +21,7 @@ def get_best_lr_alpha(X, y, cv, estimator, random_state, penalty, n_jobs):
                                                  n_jobs=n_jobs)
 
     alpha_table = alpha_table.append(exponential_alpha_greed_search(X, y, estimator,
-                                                                    start=alpha_table.index[0]/20,
+                                                                    start=alpha_table.index[0] / 20,
                                                                     exponential_step=4.47,
                                                                     number=4,
                                                                     cv=cv,
@@ -44,14 +43,12 @@ def exponential_alpha_greed_search(X, y, estimator,
                                    number,
                                    cv,
                                    n_jobs):
-
     alphas = [start * exponential_step ** i for i in range(number)]
     clf = GridSearchCV(estimator, param_grid={'alpha': alphas}, cv=cv, n_jobs=n_jobs).fit(X, y)
     return pd.Series(data=clf.cv_results_['mean_test_score'], index=alphas).sort_values(ascending=False)
 
 
 def add_point_to_table(X, y, alpha_table, index1, index2, estimator, cv, n_jobs, reverse=False):
-
     left_alpha = alpha_table.index[index1]
     right_alpha = alpha_table.index[index2]
     left_score = alpha_table.iloc[index1]
@@ -76,3 +73,14 @@ def calculate_next_point(X, y, interval, estimator, cv, n_jobs):
     new_score = cross_val_score(estimator, X, y, cv=cv, n_jobs=n_jobs).mean()
     return new_alpha, new_score
 
+
+def get_best_cb_tree_count(X: pd.DataFrame, y: pd.Series, estimator):
+    eval_set_begin_index = - round(y.shape[0] / 3)
+
+    estimator.fit(X[:eval_set_begin_index], y[:eval_set_begin_index],
+                  eval_set=(
+                      X[eval_set_begin_index:],
+                      y[eval_set_begin_index:])
+                  )
+
+    return estimator.tree_count_
