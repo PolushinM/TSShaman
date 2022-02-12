@@ -1,9 +1,10 @@
 import unittest
-import pandas as pd
-from sklearn.metrics import r2_score
 import warnings
 import sys
 from pathlib import Path
+
+import pandas as pd
+from sklearn.metrics import r2_score
 
 sys.path.append(str(Path(__file__).parent.parent))
 import TSShaman as sh
@@ -18,25 +19,24 @@ class TaxiTest(unittest.TestCase):
         return
 
     def test_r2_performance(self):
-        model = sh.TSShaman(review_period=350, forecast_horizon=270, verbosity='debug')
+        model = sh.TSShaman(review_period=400, forecast_horizon=300, verbosity='debug')
         predicted_y = model.fit(self.X[:-300],
                                 self.y[:-300],
                                 cv=2,
-                                omega=0.25
+                                omega=0.5
                                 ).predict(forecast_segment=300)
         print(f'Test R^2={r2_score(self.y[-300:], predicted_y):.5f}\n\n')
-        self.assertGreater(r2_score(self.y[-300:], predicted_y), 0.84)
+        self.assertGreater(r2_score(self.y[-300:], predicted_y), 0.75)
 
-        model = sh.TSShaman(review_period=673, forecast_horizon=300, verbosity='debug')
+        model = sh.TSShaman(review_period=673, forecast_horizon=300, verbosity='debug', random_state=0)
         predicted_y = model.fit(self.X[:-300],
                                 self.y[:-300],
                                 cv=2,
-                                omega=0.13
+                                omega=0.2
                                 ).predict(forecast_segment=300)
 
         print(f'Test R^2={r2_score(self.y[-300:], predicted_y):.5f}')
-        self.assertGreater(r2_score(self.y[-300:], predicted_y), 0.87)
-
+        self.assertGreater(r2_score(self.y[-300:], predicted_y), 0.85)
 
 
 if __name__ == '__main__':

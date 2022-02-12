@@ -1,18 +1,17 @@
-from abc import ABCMeta, abstractmethod
-import pandas as pd
-import numpy as np
+from abc import ABC, abstractmethod
 import re
 from typing import Union
 from math import pi
 
+import pandas as pd
+import numpy as np
 
-class ShiftFeaturesBaseHost(metaclass=ABCMeta):
 
+class FeaturesBaseHost(ABC):
     def __init__(self,
                  review_period: int,
                  forecast_horizon: int,
                  name: str = ''):
-
         self.review_period = review_period
         self.forecast_horizon = forecast_horizon
         self.name = name
@@ -20,6 +19,50 @@ class ShiftFeaturesBaseHost(metaclass=ABCMeta):
         self.std = 1.0
         self.weights = None
         self.mask = None
+        return
+
+    @abstractmethod
+    def assign_mask(self, columns) -> None:
+        """Pure virtual function"""
+        """Get list of columns names, parse columns names, calculate and store feature mask in self.mask"""
+        pass
+
+    @abstractmethod
+    def generate(self, X: pd.DataFrame, y: pd.Series) -> pd.DataFrame:
+        """Pure virtual function"""
+        """Generate full list of features if mask is none, generate features by masks in case of masks was assigned"""
+        pass
+
+    @abstractmethod
+    def initialise_rows(self, X: pd.DataFrame):
+        """Pure virtual function"""
+        """Initialise data for get_one_row calculation, if necessary"""
+        pass
+
+    @abstractmethod
+    def get_one_row(self, y: np.array) -> np.array:
+        """Pure virtual function"""
+        """Calculate one row of features for predict function"""
+        pass
+
+    @property
+    @abstractmethod
+    def gbmt_weights(self) -> pd.Series:
+        """Pure virtual property"""
+        """Weights for each feature for GBMT"""
+        pass
+
+    def get_corr_weights(self, X: pd.DataFrame, y: pd.Series, corrcoef_power):
+        weights = pd.DataFrame()
+        for nm, col in X.iteritems():
+            weights[nm] = pd.Series(abs(np.corrcoef(y.values, col.values)[0, 1]) ** corrcoef_power / col.std())
+        return weights.iloc[0]
+
+
+class ShiftFeaturesBaseHost(FeaturesBaseHost):
+
+    def __init__(self, review_period: int, forecast_horizon: int, name: str = ''):
+        super().__init__(review_period, forecast_horizon, name)
         self.corrcoef_power = 0.5
         return
 
@@ -115,10 +158,15 @@ class LongShiftFeaturesHost(ShiftFeaturesBaseHost):
                 lags.append(i)
         return lags
 
+    @property
+    def gbmt_weights(self) -> pd.Series:
+        columns = [self.name + '_shift' + str(lag) for lag in self.lag_list]
+        return pd.Series(np.ones(len(columns)), index=columns)
+
 
 class ShortShiftFeaturesHost(ShiftFeaturesBaseHost):
-
-    lag_weight_power = 0.45
+    lag_weight_power = 1.0
+    gbmt_lag_weight_power = 0.3
 
     def conditional_append_mask(self, lag):
         if lag < self.forecast_horizon:
@@ -138,39 +186,50 @@ class ShortShiftFeaturesHost(ShiftFeaturesBaseHost):
                 lags.append(i)
         return lags
 
+    @property
+    def gbmt_weights(self) -> pd.Series:
+        lag_list = self.lag_list
+        if len(self.lag_list) == 0:
+            return pd.Series()
 
-class MovingAverageFeaturesHost(object):
+        weights = []
+        columns = []
 
-    def __init__(self,
-                 review_period: int,
+        for lag in lag_list:
+            columns.append(self.name + '_shift' + str(lag))
+            weights.append((lag / self.forecast_horizon) ** self.gbmt_lag_weight_power)
+
+        return pd.Series(weights, index=columns)
+
+
+class MovingAverageFeaturesHost(FeaturesBaseHost):
+
+    def __init__(self, review_period: int,
                  forecast_horizon: int,
                  name: str = '',
-                 ema_number=32,
-                 short_ema_divisor=6,
-                 ema_step_multiplier=8):
+                 ema_number=64,
+                 short_ema_divisor=12,
+                 ema_step_multiplier=12):
+        super().__init__(review_period, forecast_horizon, name)
 
-        self.review_period = review_period
-        self.forecast_horizon = forecast_horizon
-        self.name = name
+        self.corrcoef_power = 0.5
         self.ema_number = ema_number
         self.short_ema_divisor = short_ema_divisor
         self.ema_step_multiplier = ema_step_multiplier
         self.ema_windows = self.__full_ema_windows
         self.alphas = 2 / (self.ema_windows + 1)
         self.is_mask_used = False
-        self.masks = (list(self.ema_windows), list(self.ema_windows), list(self.ema_windows), list(self.ema_windows))
-        self.mean = 0.0
+        self.mask = (list(self.ema_windows), list(self.ema_windows), list(self.ema_windows), list(self.ema_windows))
         self.ema_buffer = None
         self.dma_buffer = None
         self.tma_buffer = None
         self.qma_buffer = None
-        self.weights = None
         self.__bin_mask = None
         return
 
     def assign_mask(self, columns) -> None:
         self.is_mask_used = True
-        self.masks = self.__parse_masks(columns)
+        self.mask = self.__parse_masks(columns)
         self.ema_windows = self.__masked_ema_windows
         self.alphas = 2 / (self.ema_windows + 1)
         self.__bin_mask = self.__get_bin_mask()
@@ -219,7 +278,7 @@ class MovingAverageFeaturesHost(object):
             self.weights = pd.Series()
             return pd.DataFrame()
         else:
-            self.weights = get_corr_weights(features, y)
+            self.weights = self.get_corr_weights(features, y, self.corrcoef_power)
             return features * self.weights
 
     def initialise_rows(self, X: pd.DataFrame):
@@ -282,7 +341,7 @@ class MovingAverageFeaturesHost(object):
     @property
     def __masked_ema_windows(self):
         general_mask = set()
-        for item in self.masks:
+        for item in self.mask:
             general_mask.update(item)
         ema_windows = list(general_mask)
         ema_windows.sort()
@@ -299,24 +358,34 @@ class MovingAverageFeaturesHost(object):
     def columns_to_drop(self):
         remaining_columns = set()
         columns_to_drop = list()
-        remaining_columns.update([self.name + '_ema_' + f'{window:.1f}' for window in self.masks[0]])
-        remaining_columns.update([self.name + '_dma_' + f'{window:.1f}' for window in self.masks[1]])
-        remaining_columns.update([self.name + '_tma_' + f'{window:.1f}' for window in self.masks[2]])
-        remaining_columns.update([self.name + '_qma_' + f'{window:.1f}' for window in self.masks[3]])
+        remaining_columns.update([self.name + '_ema_' + f'{window:.1f}' for window in self.mask[0]])
+        remaining_columns.update([self.name + '_dma_' + f'{window:.1f}' for window in self.mask[1]])
+        remaining_columns.update([self.name + '_tma_' + f'{window:.1f}' for window in self.mask[2]])
+        remaining_columns.update([self.name + '_qma_' + f'{window:.1f}' for window in self.mask[3]])
         for col in self.non_filtered_columns:
             if col not in remaining_columns:
                 columns_to_drop.append(col)
         return columns_to_drop
 
+    @property
+    def gbmt_weights(self) -> pd.Series:
+        columns = [self.name + '_ema_' + f'{window:.1f}' for window in self.mask[0]] + \
+                  [self.name + '_dma_' + f'{window:.1f}' for window in self.mask[1]] + \
+                  [self.name + '_tma_' + f'{window:.1f}' for window in self.mask[2]] + \
+                  [self.name + '_qma_' + f'{window:.1f}' for window in self.mask[3]]
+        return pd.Series(np.ones(len(columns)), index=columns)
 
-class TimedataFeaturesHost(object):
 
-    def __init__(self):
-        self.weights = None
-        self.mask = None
+class TimedataFeaturesHost(FeaturesBaseHost):
+
+    def __init__(self, review_period: int, forecast_horizon: int):
+        super().__init__(review_period, forecast_horizon)
+
         self.features_buffer = pd.DataFrame()
         self.__row_index = -1
         self.__calculate_weights = True
+        self.columns = []
+        self.corrcoef_power = 0.5
         return
 
     def assign_mask(self, columns) -> None:
@@ -325,9 +394,11 @@ class TimedataFeaturesHost(object):
                         'index_week_lin', 'index_week_sin', 'index_week_cos', 'index_is_weekend',
                         'index_year_lin', 'index_year_sin', 'index_year_cos'}
         self.mask = set()
+        self.columns = []
         for col in columns:
             if col in timedata_set:
                 self.mask.add(col)
+                self.columns.append(col)
         return
 
     def generate(self, X: pd.DataFrame, y: Union[pd.Series, None] = None) -> pd.DataFrame:
@@ -352,7 +423,8 @@ class TimedataFeaturesHost(object):
             if features.empty:
                 return pd.DataFrame()
             if self.__calculate_weights:
-                self.weights = get_corr_weights(features, y)
+                self.weights = self.get_corr_weights(features, y, self.corrcoef_power)
+            self.columns = features.columns.tolist()
             return features * self.weights
         else:
             return pd.DataFrame()
@@ -459,16 +531,23 @@ class TimedataFeaturesHost(object):
         # Check if the variance of values too small for week encoding
         if (np.std(week_sin) < 0.8 or np.std(week_cos) < 0.8) and (self.mask is None):
             return pd.DataFrame()
-        if (self.mask is not None) and ((name + '_week_lin') not in self.mask):
-            return pd.DataFrame()
 
         columns = [name + '_week_lin',
                    name + '_week_sin',
                    name + '_week_cos']
 
-        return pd.DataFrame(np.vstack((week_lin, week_sin, week_cos)).T,
-                            columns=columns,
-                            index=series.values)
+        result = pd.DataFrame(np.vstack((week_lin, week_sin, week_cos)).T,
+                              columns=columns,
+                              index=series.values)
+
+        if (self.mask is not None) and ((name + '_week_lin') not in self.mask):
+            result.drop((name + '_week_lin'), errors='ignore')
+        if (self.mask is not None) and ((name + '_week_sin') not in self.mask):
+            result.drop((name + '_week_sin'), errors='ignore')
+        if (self.mask is not None) and ((name + '_week_cos') not in self.mask):
+            result.drop((name + '_week_cos'), errors='ignore')
+
+        return result
 
     def generate_weekend_feature(self, series: pd.Series, name='') -> pd.DataFrame:
 
@@ -525,9 +604,6 @@ class TimedataFeaturesHost(object):
                             columns=columns,
                             index=series.values)
 
-
-def get_corr_weights(X: pd.DataFrame, y: pd.Series, corrcoef_power=0.5):
-    weights = pd.DataFrame()
-    for name, col in X.iteritems():
-        weights[name] = pd.Series(abs(np.corrcoef(y.values, col.values)[0, 1]) ** corrcoef_power / col.std())
-    return weights.iloc[0]
+    @property
+    def gbmt_weights(self) -> pd.Series:
+        return pd.Series(np.ones(len(self.columns)), index=self.columns)

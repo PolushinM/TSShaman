@@ -1,8 +1,9 @@
+from datetime import datetime
+
 from .sh_linear_model import *
 from .sh_gbmt_model import *  # TODO: Add CatBoost in imports
 from .cross_validation import *
 from ._logger import *
-from datetime import datetime
 
 
 class TSShaman(object):
@@ -22,12 +23,12 @@ class TSShaman(object):
             categorical_features: list = None,
             cv=16,
             verbose=False,
-            omega=0.001,
+            omega=0.1,
             qualification_level=1):
         start_fit_time = datetime.now()
 
-        linear_alpha_multiplier = 1.0 + 100 * omega
-        linear_feature_selection_strength = 0.025 / 0.15 * omega
+        linear_alpha_multiplier = 1.0 + 1800 * omega
+        linear_feature_selection_strength = 0.13 * 0.4
 
         self.sh_linear_model.fit(X, y,
                                  linear_features,
@@ -44,11 +45,12 @@ class TSShaman(object):
 
     def predict(self, X=pd.DataFrame(), forecast_segment=1, verbose=False):
         start_predict_time = datetime.now()
-        y_pred = self.sh_linear_model.predict(X, forecast_segment, verbose) + \
-                 self.sh_gbmt_model.predict(X, forecast_segment, verbose)
+        y_pred = self.sh_linear_model.predict(X, forecast_segment, verbose) \
+                 + self.sh_gbmt_model.predict(X, forecast_segment, verbose)
         logger.info(f'Predict time={(datetime.now() - start_predict_time).total_seconds():.1f}\n')
         return y_pred
 
     @property
     def score(self):
+        # TODO Score calculation
         return self.sh_linear_model.score

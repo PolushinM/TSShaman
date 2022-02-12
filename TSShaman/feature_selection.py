@@ -1,11 +1,10 @@
-from catboost import EFstrType
-
-from .optimization import get_best_l1_alpha
-from ._logger import *
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import cross_val_score
-from catboost import Pool
+from catboost import Pool, EFstrType
+
+from .optimization import get_best_l1_alpha
+from ._logger import *
 
 
 def l1_feature_select(X: pd.DataFrame, y, estimator, strength, cv, random_state, n_jobs=-1):
@@ -78,7 +77,7 @@ def coefficient_feature_select(X, y, estimator, quantile):
                                                    verbose=False)
 
     threshold = np.quantile(np.array(coefs_table), quantile)
-    logger.debug(f'Coefficient threshold={threshold:.5f}')
+    logger.debug(f'Coefficient threshold={threshold / coefs_table.sum() * 100:.3f}%')
 
     i = 0
     for coef in coefs_table:
@@ -91,7 +90,7 @@ def coefficient_feature_select(X, y, estimator, quantile):
 
 def catboost_feature_select(X, y, estimator, quantile):
 
-    eval_set_begin_index = - round(y.shape[0] * 0.55)
+    eval_set_begin_index = - round(y.shape[0] * 0.65)
 
     dropped_features = estimator.select_features(X[:eval_set_begin_index],
                                                  y[:eval_set_begin_index],
@@ -99,7 +98,7 @@ def catboost_feature_select(X, y, estimator, quantile):
                                                      X[eval_set_begin_index:],
                                                      y[eval_set_begin_index:]),
                                                  features_for_select=X.columns.tolist(),
-                                                 num_features_to_select=round(len(X.columns) * (1 - quantile)),
+                                                 num_features_to_select=round((len(X.columns) * (1 - quantile))**0.5 * 12),
                                                  algorithm=None,
                                                  steps=3,
                                                  shap_calc_type=None,
